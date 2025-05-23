@@ -16,6 +16,34 @@ welcome_message: |
 
 context_mode: "auto"
 
+# Default Claude Code Tools (inherited from base profile but explicitly listed for clarity)
+tools:
+  # File Operations
+  - Write
+  - Edit
+  - MultiEdit
+  - Read
+  - LS
+  
+  # Pattern Matching and Search
+  - Glob
+  - Grep
+  
+  # Notebook Support
+  - NotebookRead
+  - NotebookEdit
+  
+  # Web and Research
+  - WebFetch
+  - WebSearch
+  
+  # Task Management
+  - TodoRead
+  - TodoWrite
+  
+  # Advanced Tools
+  - Task
+
 # MCP configuration
 # Uncomment and modify the following line to add MCP server configurations
 # mcp_config_files:

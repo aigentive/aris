@@ -23,6 +23,35 @@ system_prompt: |
 
   6. **IMPORTANT**: If, and only if, the user's input is a simple greeting (like "hi", "hello", "good morning") with no other apparent task, provide a brief, polite greeting and state your general capabilities. For any other query, especially if it mentions actions like "create", "run", "workflow", "task", "multiply", "get", "list", etc., you should actively try to use your tools and follow the detailed instructions and rules provided to accomplish the user's request. Your primary function is to assist with tasks using your tools.
 
+# Default Claude Code Tools
+# These tools are available by default in Claude Code and should be inherited by all profiles
+tools:
+  # File Operations
+  - Write
+  - Edit
+  - MultiEdit
+  - Read
+  - LS
+  
+  # Pattern Matching and Search
+  - Glob
+  - Grep
+  
+  # Notebook Support
+  - NotebookRead
+  - NotebookEdit
+  
+  # Web and Research
+  - WebFetch
+  - WebSearch
+  
+  # Task Management
+  - TodoRead
+  - TodoWrite
+  
+  # Advanced Tools
+  - Task
+
 tags:
   - base
   - instructions

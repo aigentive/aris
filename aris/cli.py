@@ -171,10 +171,6 @@ async def run_cli_orchestrator():
     This handles the application's main loop, switching between text and voice modes,
     and processing user input through the assistant.
     """
-    if not os.getenv("AIGENTIVE_API_KEY"):
-        print_formatted_text(FormattedText([
-            ('class:warning', "Warning: AIGENTIVE_API_KEY environment variable is not set. MCP tool calls requiring auth may fail.")
-        ]), style=cli_style)
     
     # Determine the profile name for welcome message
     profile_name = "default"
