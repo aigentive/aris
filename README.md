@@ -208,8 +208,15 @@ We welcome contributions that enhance the ARIS methodology! Areas of interest:
 - Documentation and examples
 - Performance optimizations
 
-Please ensure all tests pass before submitting PRs:
+### Development Setup
+
+See the [Development Guide](DEVELOPMENT.md) for detailed setup instructions, coding standards, and contribution workflow.
+
+Quick start for contributors:
 ```bash
+git clone https://github.com/aigentive/aris.git
+cd aris
+poetry install
 poetry run pytest tests/
 ```
 

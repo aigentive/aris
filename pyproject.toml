@@ -23,7 +23,7 @@ classifiers = [
 packages = [{include = "aris"}]
 
 [tool.poetry.scripts]
-aris = "aris.cli:main"
+aris = "aris.__main__:main"
 
 [tool.poetry.dependencies]
 python = ">=3.10,<3.12"
