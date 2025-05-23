@@ -24,8 +24,24 @@ if sys.platform == 'darwin':
             def set_child_watcher(self, watcher):
                 self._watcher = watcher
         
-        # Set the custom policy
-        asyncio.set_event_loop_policy(MacOSAsyncioPolicy())
+        # Set the custom policy GLOBALLY for all subprocess creation
+        policy = MacOSAsyncioPolicy()
+        asyncio.set_event_loop_policy(policy)
+        
+        # Also monkey-patch the asyncio.events module to always return our watcher
+        import asyncio.events
+        original_get_child_watcher = asyncio.events.get_child_watcher
+        
+        def patched_get_child_watcher():
+            try:
+                return original_get_child_watcher()
+            except NotImplementedError:
+                # Return our ThreadedChildWatcher as fallback
+                if not hasattr(patched_get_child_watcher, '_fallback_watcher'):
+                    patched_get_child_watcher._fallback_watcher = ThreadedChildWatcher()
+                return patched_get_child_watcher._fallback_watcher
+        
+        asyncio.events.get_child_watcher = patched_get_child_watcher
         
     except ImportError:
         # Fallback for older Python versions

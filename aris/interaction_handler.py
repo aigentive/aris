@@ -177,7 +177,38 @@ async def handle_route_chunks(
                             session_id = session_state.session_id
 
                     text_to_display = None
-                    if event_data.get("type") == "assistant":
+                    
+                    # Handle system init message for MCP server status feedback
+                    if event_data.get("type") == "system" and event_data.get("subtype") == "init":
+                        mcp_servers = event_data.get("mcp_servers", [])
+                        if mcp_servers:
+                            failed_servers = [s for s in mcp_servers if s.get("status") == "failed"]
+                            success_servers = [s for s in mcp_servers if s.get("status") not in ["failed", "error"]]
+                            
+                            if failed_servers or success_servers:
+                                await stop_spinner(stop_spinner_event, spinner)
+                                
+                                if success_servers:
+                                    server_names = [s.get("name", "unknown") for s in success_servers]
+                                    print_formatted_text(FormattedText([
+                                        ("class:prompt.assistant.prefix", "🔌 MCP > "),
+                                        ("fg:green", f"Connected to {len(success_servers)} MCP server(s): {', '.join(server_names)}")
+                                    ]), style=cli_style)
+                                    
+                                if failed_servers:
+                                    server_names = [s.get("name", "unknown") for s in failed_servers]
+                                    print_formatted_text(FormattedText([
+                                        ("class:prompt.assistant.prefix", "🔌 MCP > "),
+                                        ("fg:red", f"Failed to connect to {len(failed_servers)} MCP server(s): {', '.join(server_names)}")
+                                    ]), style=cli_style)
+                                    print_formatted_text(FormattedText([
+                                        ("class:prompt.assistant.prefix", "💡 Tip > "),
+                                        ("fg:yellow", "Check server installation and configuration. Some tools may not be available.")
+                                    ]), style=cli_style)
+                                
+                                stop_spinner_event, spinner = start_spinner(thinking_prefix)
+                    
+                    elif event_data.get("type") == "assistant":
                         message_content = event_data.get("message", {}).get("content", [])
                         for content_item in message_content:
                             if content_item.get("type") == "text":
