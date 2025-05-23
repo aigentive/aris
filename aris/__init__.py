@@ -10,18 +10,15 @@ if sys.platform == 'darwin':
     # Suppress deprecation warnings for child watcher
     warnings.filterwarnings("ignore", category=DeprecationWarning, module="asyncio")
     
-    # For Python 3.8+, use the new subprocess creation method that doesn't require child watchers
-    if hasattr(asyncio, 'create_subprocess_exec'):
-        # Force use of ThreadedChildWatcher to avoid NotImplementedError
+    # For macOS, set up ThreadedChildWatcher to avoid NotImplementedError
+    try:
         from asyncio import ThreadedChildWatcher
         
-        # Create a custom policy that always uses ThreadedChildWatcher
+        # Create a simple custom policy that always uses ThreadedChildWatcher
         class MacOSAsyncioPolicy(asyncio.DefaultEventLoopPolicy):
-            def __init__(self):
-                super().__init__()
-                self._watcher = ThreadedChildWatcher()
-                
             def get_child_watcher(self):
+                if not hasattr(self, '_watcher') or self._watcher is None:
+                    self._watcher = ThreadedChildWatcher()
                 return self._watcher
                 
             def set_child_watcher(self, watcher):
@@ -29,6 +26,10 @@ if sys.platform == 'darwin':
         
         # Set the custom policy
         asyncio.set_event_loop_policy(MacOSAsyncioPolicy())
+        
+    except ImportError:
+        # Fallback for older Python versions
+        pass
 
 # Add imports for main components that should be available at the module level
 from .cli import run_cli_orchestrator

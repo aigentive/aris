@@ -126,6 +126,34 @@ class ClaudeCLIExecutor:
                     signal.signal(signal.SIGINT, signal.SIG_IGN)
                 kwargs['preexec_fn'] = preexec_fn
             
+            # Force fix macOS subprocess issue at creation time
+            if sys.platform == 'darwin':
+                policy = asyncio.get_event_loop_policy()
+                log_router_activity(f"ClaudeCLIExecutor: Policy type: {type(policy).__name__}")
+                
+                # If we don't have our custom policy, apply the fix now
+                if 'MacOSAsyncioPolicy' not in str(type(policy)):
+                    log_router_activity("ClaudeCLIExecutor: Applying macOS subprocess fix directly")
+                    try:
+                        from asyncio import ThreadedChildWatcher
+                        
+                        # Create ThreadedChildWatcher and attach to current loop
+                        loop = asyncio.get_running_loop()
+                        watcher = ThreadedChildWatcher()
+                        watcher.attach_loop(loop)
+                        
+                        # Create a temporary policy wrapper
+                        original_get_child_watcher = policy.get_child_watcher
+                        policy.get_child_watcher = lambda: watcher
+                        
+                        log_router_activity("ClaudeCLIExecutor: macOS subprocess fix applied")
+                        
+                    except Exception as e:
+                        log_error(f"ClaudeCLIExecutor: Failed to apply macOS fix: {e}")
+                        raise
+                else:
+                    log_router_activity("ClaudeCLIExecutor: Custom macOS policy is active")
+            
             # Create the subprocess
             proc = await asyncio.create_subprocess_exec(*cmd, **kwargs)
             log_router_activity(f"ClaudeCLIExecutor: Subprocess started. PID: {proc.pid if proc else 'N/A'}")
