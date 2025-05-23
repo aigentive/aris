@@ -10,7 +10,8 @@
       "Bash(poetry run:*)",
       "Bash(rg:*)",
       "Bash(poetry add:*)",
-      "Bash(awk:*)"
+      "Bash(awk:*)",
+      "Bash(git add:*)"
     ],
     "deny": []
   }
