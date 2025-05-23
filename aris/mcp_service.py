@@ -282,55 +282,84 @@ class MCPService:
         try:
             # Set a timeout for the entire operation
             async with asyncio.timeout(15.0):
-                # Use stdio_client in a single context manager
-                async with stdio_client(server_params) as (read_stream, write_stream):
-                    # Initialize session and fetch tools without breaking the context
-                    async with ClientSession(read_stream, write_stream) as session:
-                        # Wait for initialization
-                        await session.initialize()
-                        
-                        # Fetch tools immediately
-                        log_router_activity(f"MCPService: Fetching tools from stdio server '{server_name}'")
-                        list_tools_result = await session.list_tools()
-                        
-                        # Process tools
-                        fetched_tools = []
-                        if list_tools_result and hasattr(list_tools_result, 'tools') and list_tools_result.tools:
-                            for tool_obj in list_tools_result.tools:
-                                if isinstance(tool_obj, mcp_types.Tool):
-                                    tool_dict = tool_obj.model_dump(exclude_none=True, by_alias=True)
-                                    # Add server_name to each tool schema
-                                    tool_dict["server_name"] = server_name
-                                    fetched_tools.append(tool_dict)
-                                else:
-                                    log_warning(f"MCPService: Encountered non-Tool object from server '{server_name}': {type(tool_obj)}")
-                        
-                        log_router_activity(f"MCPService: Successfully fetched {len(fetched_tools)} tools from stdio server '{server_name}'")
-                        
-                        # Display a message when tools are successfully fetched
-                        if fetched_tools:
-                            from .logging_utils import log_info
-                            # Import prompt_toolkit formatting only if needed
-                            try:
-                                from prompt_toolkit import print_formatted_text
-                                from prompt_toolkit.formatted_text import FormattedText
-                                # Import cli_style if available
-                                try:
-                                    from .cli import cli_style
-                                    style = cli_style
-                                except ImportError:
-                                    style = None
-                                    
-                                # Use a style consistent with the CLI
-                                # Make sure we end with multiple newlines to ensure clean prompt separation
-                                print_formatted_text(FormattedText([("bold fg:green", f"\nMCP server '{server_name}' has started and is ready with {len(fetched_tools)} tools.")]), style=style)
-                                # Add extra blank lines to ensure clean separation from prompt
-                                print("\n")
-                            except ImportError:
-                                # Fall back to standard print if prompt_toolkit is not available
-                                log_info(f"MCP server '{server_name}' has started and is ready with {len(fetched_tools)} tools.\n\n")
+                # Patch asyncio subprocess creation to capture stderr
+                original_create_subprocess_exec = asyncio.create_subprocess_exec
+                captured_stderr = []
+                
+                async def patched_create_subprocess_exec(*args, **kwargs):
+                    # Force stderr to be captured
+                    kwargs['stderr'] = asyncio.subprocess.PIPE
+                    kwargs['stdout'] = asyncio.subprocess.PIPE
+                    
+                    try:
+                        proc = await original_create_subprocess_exec(*args, **kwargs)
+                        # Read stderr in background and capture it
+                        if proc.stderr:
+                            stderr_data = await proc.stderr.read()
+                            if stderr_data:
+                                captured_stderr.append(stderr_data.decode())
+                        return proc
+                    except Exception as e:
+                        # If subprocess creation fails, capture that too
+                        captured_stderr.append(str(e))
+                        raise
+                
+                # Apply the patch
+                asyncio.create_subprocess_exec = patched_create_subprocess_exec
+                
+                try:
+                    # Use stdio_client in a single context manager
+                    async with stdio_client(server_params) as (read_stream, write_stream):
+                            # Initialize session and fetch tools without breaking the context
+                            async with ClientSession(read_stream, write_stream) as session:
+                                # Wait for initialization
+                                await session.initialize()
                                 
-                        return fetched_tools
+                                # Fetch tools immediately
+                                log_router_activity(f"MCPService: Fetching tools from stdio server '{server_name}'")
+                                list_tools_result = await session.list_tools()
+                                
+                                # Process tools
+                                fetched_tools = []
+                                if list_tools_result and hasattr(list_tools_result, 'tools') and list_tools_result.tools:
+                                    for tool_obj in list_tools_result.tools:
+                                        if isinstance(tool_obj, mcp_types.Tool):
+                                            tool_dict = tool_obj.model_dump(exclude_none=True, by_alias=True)
+                                            # Add server_name to each tool schema
+                                            tool_dict["server_name"] = server_name
+                                            fetched_tools.append(tool_dict)
+                                        else:
+                                            log_warning(f"MCPService: Encountered non-Tool object from server '{server_name}': {type(tool_obj)}")
+                                
+                                log_router_activity(f"MCPService: Successfully fetched {len(fetched_tools)} tools from stdio server '{server_name}'")
+                                
+                                # Display a message when tools are successfully fetched
+                                if fetched_tools:
+                                    from .logging_utils import log_info
+                                    # Import prompt_toolkit formatting only if needed
+                                    try:
+                                        from prompt_toolkit import print_formatted_text
+                                        from prompt_toolkit.formatted_text import FormattedText
+                                        # Import cli_style if available
+                                        try:
+                                            from .cli import cli_style
+                                            style = cli_style
+                                        except ImportError:
+                                            style = None
+                                            
+                                        # Use a style consistent with the CLI
+                                        # Make sure we end with multiple newlines to ensure clean prompt separation
+                                        print_formatted_text(FormattedText([("bold fg:green", f"\nMCP server '{server_name}' has started and is ready with {len(fetched_tools)} tools.")]), style=style)
+                                        # Add extra blank lines to ensure clean separation from prompt
+                                        print("\n")
+                                    except ImportError:
+                                        # Fall back to standard print if prompt_toolkit is not available
+                                        log_info(f"MCP server '{server_name}' has started and is ready with {len(fetched_tools)} tools.\n\n")
+                                        
+                                return fetched_tools
+                finally:
+                    # Restore original function
+                    asyncio.create_subprocess_exec = original_create_subprocess_exec
         except asyncio.TimeoutError:
             log_warning(f"MCPService: Timeout connecting to stdio server '{server_name}'")
             return []
@@ -338,6 +367,66 @@ class MCPService:
             log_error(f"MCPService: Error connecting to stdio server '{server_name}': {e}")
             import traceback
             log_error(f"MCPService: Traceback: {traceback.format_exc()}")
+            
+            # Use captured stderr for better error details
+            error_details = str(e)
+            if 'captured_stderr' in locals() and captured_stderr:
+                stderr_text = ''.join(captured_stderr).strip()
+                if stderr_text and len(stderr_text) > len(error_details):
+                    error_details = stderr_text
+                    log_error(f"MCPService: Captured stderr from '{server_name}': {stderr_text}")
+            
+            # Show user-friendly error message
+            try:
+                from prompt_toolkit import print_formatted_text
+                from prompt_toolkit.formatted_text import FormattedText
+                from .cli import cli_style
+                
+                # Parse common error types for better user feedback
+                error_str = error_details.lower()
+                if "modulenotfounderror" in error_str or "no module named" in error_str:
+                    print_formatted_text(FormattedText([
+                        ("class:prompt.assistant.prefix", "🔌 MCP > "),
+                        ("fg:red", f"Failed to start '{server_name}': Module not found")
+                    ]), style=cli_style)
+                    print_formatted_text(FormattedText([
+                        ("class:prompt.assistant.prefix", "💡 Tip > "),
+                        ("fg:yellow", "Check server installation and Python module path")
+                    ]), style=cli_style)
+                elif "permission denied" in error_str:
+                    print_formatted_text(FormattedText([
+                        ("class:prompt.assistant.prefix", "🔌 MCP > "),
+                        ("fg:red", f"Failed to start '{server_name}': Permission denied")
+                    ]), style=cli_style)
+                    print_formatted_text(FormattedText([
+                        ("class:prompt.assistant.prefix", "💡 Tip > "),
+                        ("fg:yellow", "Check file permissions and executable status")
+                    ]), style=cli_style)
+                elif "timeout" in error_str:
+                    print_formatted_text(FormattedText([
+                        ("class:prompt.assistant.prefix", "🔌 MCP > "),
+                        ("fg:red", f"Failed to start '{server_name}': Connection timeout")
+                    ]), style=cli_style)
+                    print_formatted_text(FormattedText([
+                        ("class:prompt.assistant.prefix", "💡 Tip > "),
+                        ("fg:yellow", "Server may be slow to start or have startup issues")
+                    ]), style=cli_style)
+                else:
+                    print_formatted_text(FormattedText([
+                        ("class:prompt.assistant.prefix", "🔌 MCP > "),
+                        ("fg:red", f"Failed to start '{server_name}': {str(e)[:100]}{'...' if len(str(e)) > 100 else ''}")
+                    ]), style=cli_style)
+                    print_formatted_text(FormattedText([
+                        ("class:prompt.assistant.prefix", "💡 Tip > "),
+                        ("fg:yellow", "Check server configuration and logs for details")
+                    ]), style=cli_style)
+                
+                print()  # Add spacing
+                
+            except ImportError:
+                # Fallback if prompt_toolkit not available
+                print(f"❌ MCP server '{server_name}' failed to start: {e}")
+            
             return []
     
     async def _close_stdio_servers(self) -> None:
