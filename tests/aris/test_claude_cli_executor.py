@@ -3,7 +3,7 @@
 import pytest 
 import asyncio
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch, ANY
 from aris import claude_cli_executor
 from aris.claude_cli_executor import ClaudeCLIExecutor
 
@@ -52,11 +52,22 @@ async def test_execute_cli_success_new_session(executor: ClaudeCLIExecutor, mock
     with patch("asyncio.create_subprocess_exec", return_value=mock_process) as mock_create_subprocess:
         results = [chunk async for chunk in executor.execute_cli(prompt_string=prompt, shared_flags=flags)]
 
-        mock_create_subprocess.assert_awaited_once_with(
-            *expected_cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
+        # Check subprocess call - behavior varies by platform
+        import sys
+        if sys.platform.startswith('linux'):
+            mock_create_subprocess.assert_awaited_once_with(
+                *expected_cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                preexec_fn=ANY
+            )
+        else:
+            # On macOS, it tries create_subprocess_exec first
+            mock_create_subprocess.assert_awaited_once_with(
+                *expected_cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
         mock_process.wait.assert_awaited_once()
 
         assert len(results) == 3
@@ -78,7 +89,12 @@ async def test_execute_cli_success_resume_session(executor: ClaudeCLIExecutor, m
 
     with patch("asyncio.create_subprocess_exec", return_value=mock_process) as mock_create_subprocess:
         results = [chunk async for chunk in executor.execute_cli(prompt_string=prompt, shared_flags=flags, session_to_resume=session_id)]
-        mock_create_subprocess.assert_awaited_once_with(*expected_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        # Check subprocess call - preexec_fn is only used on Linux
+        import sys
+        if sys.platform.startswith('linux'):
+            mock_create_subprocess.assert_awaited_once_with(*expected_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, preexec_fn=ANY)
+        else:
+            mock_create_subprocess.assert_awaited_once_with(*expected_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         assert len(results) == 1
         assert json.loads(results[0]) == {"type": "resumed"}
 
@@ -122,8 +138,9 @@ async def test_execute_cli_unexpected_exception(executor: ClaudeCLIExecutor):
         assert len(results) == 1
         error_result = json.loads(results[0])
         assert error_result["type"] == "error"
-        assert error_result["error"]["message"] == "ClaudeCLIExecutor: Unexpected error running Claude CLI: Unexpected subprocess boom"
-        claude_cli_executor.log_error.assert_called_with("ClaudeCLIExecutor: Unexpected error running Claude CLI: Unexpected subprocess boom", "Unexpected subprocess boom")
+        assert error_result["error"]["message"] == "ClaudeCLIExecutor: Unexpected error running Claude CLI: Exception('Unexpected subprocess boom')"
+        # Check that log_error was called with the repr() format
+        claude_cli_executor.log_error.assert_any_call("ClaudeCLIExecutor: Unexpected error running Claude CLI: Exception('Unexpected subprocess boom')", exception_info="Exception('Unexpected subprocess boom')")
 
 @pytest.mark.asyncio
 async def test_execute_cli_no_stdout_or_stderr_clean_exit(executor: ClaudeCLIExecutor, mock_process: AsyncMock):

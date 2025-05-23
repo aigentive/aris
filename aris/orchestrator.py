@@ -127,6 +127,15 @@ async def refresh_tools_schema():
         log_warning("MCP SDK not available via MCPService, TOOLS_SCHEMA will be empty.")
         TOOLS_SCHEMA = []
 
+def get_claude_cli_executor() -> Optional[ClaudeCLIExecutor]:
+    """
+    Get the current Claude CLI executor instance for signal handling.
+    
+    Returns:
+        The ClaudeCLIExecutor instance or None if not initialized
+    """
+    return claude_cli_executor_instance
+
 async def route(
     user_msg_for_turn: str,
     claude_session_to_resume: Optional[str] = None,

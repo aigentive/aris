@@ -6,6 +6,7 @@ import asyncio
 from typing import Optional
 
 from .logging_utils import log_debug, log_warning, log_error
+from .interrupt_handler import get_interrupt_handler, InterruptContext
 
 # TTS configuration
 TTS_VOICE = "nova"  # Default TTS voice
@@ -16,6 +17,12 @@ _tts_playback_lock = asyncio.Lock()
 # Voice dependencies
 _voice_dependencies_loaded = False
 _async_openai_client_for_tts = None
+
+# Current TTS playback task for interruption
+_current_tts_task: Optional[asyncio.Task] = None
+
+# TTS interruption event
+_tts_interrupt_event = asyncio.Event()
 
 # Dynamically loaded modules
 OpenAI = None
@@ -128,6 +135,23 @@ def _init_openai_clients_for_tts():
         
         return False
 
+def interrupt_tts():
+    """
+    Interrupt current TTS playback.
+    
+    This function is called by the interrupt handler when CTRL+C
+    is pressed during TTS playback.
+    """
+    global _current_tts_task
+    
+    log_debug("[TTS] Interrupt requested")
+    _tts_interrupt_event.set()
+    
+    # Cancel the current TTS task if it exists
+    if _current_tts_task and not _current_tts_task.done():
+        log_debug("[TTS] Cancelling current TTS task")
+        _current_tts_task.cancel()
+
 async def tts_speak(text: str):
     """
     Speak the given text using TTS.
@@ -135,6 +159,8 @@ async def tts_speak(text: str):
     Args:
         text: The text to speak
     """
+    global _current_tts_task, _tts_interrupt_event
+    
     log_debug(f"[TTS] Attempting to speak: '{text[:50]}...'")
     
     if not _async_openai_client_for_tts:
@@ -142,43 +168,93 @@ async def tts_speak(text: str):
             log_warning("[TTS] Cannot speak due to missing API key or dependencies. TTS Disabled.")
             return
     
-    try:  # Outer try for KeyboardInterrupt on the whole tts_speak task
+    # Reset interrupt event
+    _tts_interrupt_event.clear()
+    
+    # Store current task
+    _current_tts_task = asyncio.current_task()
+    
+    # Get interrupt handler and register callback
+    interrupt_handler = get_interrupt_handler()
+    interrupt_handler.register_tts_callback(interrupt_tts)
+    
+    try:
+        # Set TTS context
+        interrupt_handler.set_context(InterruptContext.TTS_PLAYING)
+        
         async with _tts_playback_lock:
             log_debug("[TTS] Playback lock acquired.")
             try:
                 log_debug("[TTS] Requesting speech stream from OpenAI...")
+                
+                # Check if interrupted before starting
+                if _tts_interrupt_event.is_set():
+                    log_debug("[TTS] Interrupted before starting playback")
+                    return
+                
                 async with _async_openai_client_for_tts.audio.speech.with_streaming_response.create(
                     model="gpt-4o-mini-tts", voice=TTS_VOICE, input=text, response_format="pcm",
                 ) as resp:
                     log_debug(f"[TTS] Received speech stream, status: {resp.status_code}.")
                     if not LocalAudioPlayer:
-                         log_error("[TTS] LocalAudioPlayer not available.")
-                         return
+                        log_error("[TTS] LocalAudioPlayer not available.")
+                        return
+                    
                     log_debug("[TTS] Attempting to play audio...")
-                    await LocalAudioPlayer().play(resp)
-                    log_debug("[TTS] Audio playback finished.")
+                    
+                    # Create playback task that can be cancelled
+                    playback_task = asyncio.create_task(LocalAudioPlayer().play(resp))
+                    
+                    # Wait for either playback to complete or interruption
+                    interrupt_task = asyncio.create_task(_tts_interrupt_event.wait())
+                    
+                    done, pending = await asyncio.wait(
+                        [playback_task, interrupt_task],
+                        return_when=asyncio.FIRST_COMPLETED
+                    )
+                    
+                    # Cancel any pending tasks
+                    for task in pending:
+                        task.cancel()
+                        try:
+                            await task
+                        except asyncio.CancelledError:
+                            pass
+                    
+                    if interrupt_task in done:
+                        log_debug("[TTS] Playback interrupted by user")
+                        from prompt_toolkit import print_formatted_text
+                        from prompt_toolkit.formatted_text import FormattedText
+                        
+                        try:
+                            from .cli import cli_style
+                        except ImportError:
+                            cli_style = None
+                            
+                        print_formatted_text(FormattedText([
+                            ('class:warning', "\n[TTS] Speech cancelled by user.")
+                        ]), style=cli_style)
+                    else:
+                        log_debug("[TTS] Audio playback finished normally")
+                        
+            except asyncio.CancelledError:
+                log_debug("[TTS] Task cancelled")
+                raise
             except Exception as e:
                 log_error(f"[TTS] API/playback error: {e}.", exception_info=str(e))
             finally:
                 log_debug("[TTS] Playback lock released.")
-    except KeyboardInterrupt:
-        # User-facing message can remain, but internal log should use logging_utils
-        from prompt_toolkit import print_formatted_text
-        from prompt_toolkit.formatted_text import FormattedText
-        
-        # This import should be available as it's a direct dependency
-        try:
-            from .cli import cli_style
-        except ImportError:
-            cli_style = None
-            
-        print_formatted_text(FormattedText([
-            ('class:warning', "\n[TTS] Speech cancelled by user.")
-        ]), style=cli_style)
-        
-        log_warning("[TTS] TTS task explicitly cancelled by user (KeyboardInterrupt).")
+    
+    except asyncio.CancelledError:
+        log_warning("[TTS] TTS task cancelled")
+        # Re-raise to propagate cancellation
+        raise
     except Exception as e_outer:
         log_error(f"[TTS] Outer error in tts_speak: {e_outer}.", exception_info=str(e_outer))
+    finally:
+        # Reset context back to idle
+        interrupt_handler.set_context(InterruptContext.IDLE)
+        _current_tts_task = None
 
 async def summarize_for_voice(text: str, max_len: int = 220) -> str:
     """

@@ -23,6 +23,7 @@ from .logging_utils import (
 from .session_state import SessionState, get_current_session_state, set_current_session_state
 from .tts_handler import tts_speak, summarize_for_voice
 from .profile_handler import process_special_commands
+from .interrupt_handler import get_interrupt_handler, InterruptContext
 
 # Constants for spinner animation
 SPINNER_CHARS = ['|', '/', '-', '\\']
@@ -116,6 +117,10 @@ async def handle_route_chunks(
     """
     from .cli_args import TEXT_MODE_TTS_ENABLED
     
+    # Set context to Claude thinking
+    interrupt_handler = get_interrupt_handler()
+    interrupt_handler.set_context(InterruptContext.CLAUDE_THINKING)
+    
     stop_spinner_event, spinner = start_spinner(thinking_prefix)
     assistant_text_parts = []
     assistant_spoke = False
@@ -148,73 +153,108 @@ async def handle_route_chunks(
             is_first_message = session_state.is_first_message()
         
         from .orchestrator import route
-        async for chunk_str in route(
-            user_msg,
-            session_id,
-            tool_preferences=tool_preferences,
-            system_prompt=system_prompt,
-            reference_file_path=reference_file_path,
-            is_first_message=is_first_message
-        ):
-            try:
-                event_data = json.loads(chunk_str)
-                session_id_from_event = event_data.get("session_id")
-                if session_id_from_event:
-                    # Always store the latest session ID from events for return value
-                    result_session_id = session_id_from_event
-                    if isinstance(session_state, str):
-                        # For test compatibility
-                        session_id = session_id_from_event
-                    else:
-                        # Normal operation
-                        session_state.session_id = session_id_from_event
-                        session_id = session_state.session_id
+        try:
+            async for chunk_str in route(
+                user_msg,
+                session_id,
+                tool_preferences=tool_preferences,
+                system_prompt=system_prompt,
+                reference_file_path=reference_file_path,
+                is_first_message=is_first_message
+            ):
+                try:
+                    event_data = json.loads(chunk_str)
+                    session_id_from_event = event_data.get("session_id")
+                    if session_id_from_event:
+                        # Always store the latest session ID from events for return value
+                        result_session_id = session_id_from_event
+                        if isinstance(session_state, str):
+                            # For test compatibility
+                            session_id = session_id_from_event
+                        else:
+                            # Normal operation
+                            session_state.session_id = session_id_from_event
+                            session_id = session_state.session_id
 
-                text_to_display = None
-                if event_data.get("type") == "assistant":
-                    message_content = event_data.get("message", {}).get("content", [])
-                    for content_item in message_content:
-                        if content_item.get("type") == "text":
-                            text_piece = content_item.get("text", "")
-                            if text_piece:
-                                text_to_display = text_piece
-                                assistant_text_parts.append(text_piece)
-                                assistant_spoke = True 
-                elif event_data.get("type") == "result" and event_data.get("subtype") == "success" and not assistant_spoke:
-                    result_text = event_data.get("result")
-                    if isinstance(result_text, str):
-                        text_to_display = result_text
-                        assistant_text_parts.append(result_text)
-                        assistant_spoke = True
-                
-                if text_to_display is not None:
-                    await stop_spinner(stop_spinner_event, spinner) 
-                    current_prefix = thinking_prefix.split("<")[0] + "< "
-                    print_formatted_text(FormattedText([
-                        ("class:prompt.assistant.prefix", current_prefix),
-                        ("class:prompt.assistant.text", text_to_display.strip())
-                    ]), style=cli_style)
+                    text_to_display = None
+                    if event_data.get("type") == "assistant":
+                        message_content = event_data.get("message", {}).get("content", [])
+                        for content_item in message_content:
+                            if content_item.get("type") == "text":
+                                text_piece = content_item.get("text", "")
+                                if text_piece:
+                                    text_to_display = text_piece
+                                    assistant_text_parts.append(text_piece)
+                                    assistant_spoke = True 
+                    elif event_data.get("type") == "result" and event_data.get("subtype") == "success" and not assistant_spoke:
+                        result_text = event_data.get("result")
+                        if isinstance(result_text, str):
+                            text_to_display = result_text
+                            assistant_text_parts.append(result_text)
+                            assistant_spoke = True
                     
-                    if TEXT_MODE_TTS_ENABLED:
-                        log_debug(f"[TTS] Individual Piece Triggered for text mode. Text: '{text_to_display[:30]}...'")
-                        summary = await summarize_for_voice(text_to_display) 
-                        asyncio.create_task(tts_speak(summary))
-                    
-                    stop_spinner_event, spinner = start_spinner(thinking_prefix)
+                    if text_to_display is not None:
+                        await stop_spinner(stop_spinner_event, spinner) 
+                        current_prefix = thinking_prefix.split("<")[0] + "< "
+                        print_formatted_text(FormattedText([
+                            ("class:prompt.assistant.prefix", current_prefix),
+                            ("class:prompt.assistant.text", text_to_display.strip())
+                        ]), style=cli_style)
+                        
+                        if TEXT_MODE_TTS_ENABLED:
+                            log_debug(f"[TTS] Individual Piece Triggered for text mode. Text: '{text_to_display[:30]}...'")
+                            summary = await summarize_for_voice(text_to_display) 
+                            asyncio.create_task(tts_speak(summary))
+                        
+                        stop_spinner_event, spinner = start_spinner(thinking_prefix)
 
-                # Check if this is a reference file read confirmation message
-                if (is_first_message and reference_file_path and
-                    text_to_display is not None and
-                    "read" in text_to_display.lower() and 
-                    "reference file" in text_to_display.lower()):
-                    if not isinstance(session_state, str):
-                        session_state.has_read_reference_file = True
-                        log_debug(f"Detected reference file read confirmation: {text_to_display[:50]}...")
+                    # Check if this is a reference file read confirmation message
+                    if (is_first_message and reference_file_path and
+                        text_to_display is not None and
+                        "read" in text_to_display.lower() and 
+                        "reference file" in text_to_display.lower()):
+                        if not isinstance(session_state, str):
+                            session_state.has_read_reference_file = True
+                            log_debug(f"Detected reference file read confirmation: {text_to_display[:50]}...")
 
-            except json.JSONDecodeError: 
-                log_warning(f"Non-JSON chunk from Claude CLI: {chunk_str.strip()}")
-            # Let other exceptions, including KeyboardInterrupt, propagate up
+                except json.JSONDecodeError: 
+                    log_warning(f"Non-JSON chunk from Claude CLI: {chunk_str.strip()}")
+                    # Let other exceptions, including KeyboardInterrupt, propagate up
+        except KeyboardInterrupt:
+            # Handle CTRL+C during Claude CLI execution
+            await stop_spinner(stop_spinner_event, spinner)
+            log_router_activity("KeyboardInterrupt caught during Claude CLI execution - terminating process")
+            
+            # Terminate the Claude CLI process
+            from .orchestrator import get_claude_cli_executor
+            executor = get_claude_cli_executor()
+            if executor:
+                await executor.terminate_current_process()
+            
+            print_formatted_text(FormattedText([
+                ('class:warning', "\n⚠️ Claude CLI execution cancelled by user (CTRL+C)")
+            ]), style=cli_style)
+            
+            # Raise a custom exception to indicate cancellation without exiting
+            raise TurnCancelledError("Turn cancelled by user interrupt")
+        
+        except Exception as route_iteration_err:
+            # Handle other errors during route iteration
+            await stop_spinner(stop_spinner_event, spinner)
+            log_error(f"Error during route iteration: {route_iteration_err}", exception_info=str(route_iteration_err))
+            raise  # Re-raise to be handled by outer exception handler
 
+    except TurnCancelledError:
+        # Handle turn cancellation (CTRL+C during Claude execution)
+        log_router_activity("Turn was cancelled by user interrupt")
+        # Return what we have so far
+        concatenated_text = "".join(assistant_text_parts)
+        if result_session_id:
+            return result_session_id, concatenated_text, assistant_spoke
+        elif isinstance(session_state, str):
+            return session_state, concatenated_text, assistant_spoke
+        else:
+            return session_state.session_id if session_state else None, concatenated_text, assistant_spoke
     except Exception as route_err:  # Catch other errors from route() or chunk processing
         if not stop_spinner_event.is_set(): 
             await stop_spinner(stop_spinner_event, spinner)
@@ -226,6 +266,9 @@ async def handle_route_chunks(
     finally:
         if 'stop_spinner_event' in locals() and stop_spinner_event and not stop_spinner_event.is_set():
             await stop_spinner(stop_spinner_event, spinner)
+        
+        # Reset context back to idle
+        interrupt_handler.set_context(InterruptContext.IDLE)
     
     concatenated_text = "".join(assistant_text_parts)
     
@@ -314,23 +357,28 @@ async def text_mode_one_turn(prompt_session: PromptSession, session_state: Sessi
     profile_name = "default"
     if not isinstance(session_state, str) and hasattr(session_state, 'active_profile') and session_state.active_profile:
         profile_name = session_state.active_profile.get("profile_name", "default")
-        
-    new_session_id, assistant_text, _ = await handle_route_chunks(
-        user_msg_input, 
-        session_state, 
-        f"🤖 ARIS [{profile_name}] < Thinking... "
-    )
     
-    # For test compatibility
-    if isinstance(session_state, str):
-        return 'continue', new_session_id
+    try:
+        new_session_id, assistant_text, _ = await handle_route_chunks(
+            user_msg_input, 
+            session_state, 
+            f"🤖 ARIS [{profile_name}] < Thinking... "
+        )
         
-    # Update session ID if we got a new one from the event
-    if new_session_id and not isinstance(session_state, str) and session_state is not None:
-        if new_session_id != session_state.session_id:
-            session_state.session_id = new_session_id
-    
-    return 'continue', session_state
+        # For test compatibility
+        if isinstance(session_state, str):
+            return 'continue', new_session_id
+            
+        # Update session ID if we got a new one from the event
+        if new_session_id and not isinstance(session_state, str) and session_state is not None:
+            if new_session_id != session_state.session_id:
+                session_state.session_id = new_session_id
+        
+        return 'continue', session_state
+    except TurnCancelledError:
+        # Turn was cancelled by CTRL+C, return to prompt
+        log_debug("Turn cancelled in text_mode_one_turn, returning to prompt")
+        return 'continue', session_state
 
 def print_welcome_message(profile_name="default"):
     """

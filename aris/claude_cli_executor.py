@@ -1,10 +1,12 @@
 import asyncio
 import json
 import os
+import signal
 from typing import List, Optional, AsyncIterator
 
 # Assuming logging_utils is in the same directory or accessible via Python path
 from .logging_utils import log_router_activity, log_error, log_warning
+
 
 class ClaudeCLIExecutor:
     def __init__(self, claude_cli_path: str):
@@ -14,7 +16,46 @@ class ClaudeCLIExecutor:
             claude_cli_path: The path to the Claude CLI executable.
         """
         self.claude_cli_path = claude_cli_path
+        self.current_process: Optional[asyncio.subprocess.Process] = None
         log_router_activity(f"ClaudeCLIExecutor initialized. CLI path: {self.claude_cli_path}")
+    
+    def terminate_current_process(self):
+        """
+        Terminates the currently running Claude CLI process.
+        
+        This is called synchronously from the interrupt handler.
+        """
+        if self.current_process:
+            if self.current_process.returncode is not None:
+                # Process already finished, just clear the reference
+                log_router_activity("ClaudeCLIExecutor: Process already finished, clearing reference")
+                self.current_process = None
+                return
+                
+            # Process is still running, terminate it
+            log_router_activity("ClaudeCLIExecutor: Terminating current Claude CLI process due to interruption")
+            try:
+                # Try graceful termination first
+                self.current_process.terminate()
+                log_router_activity(f"ClaudeCLIExecutor: Sent SIGTERM to process {self.current_process.pid}")
+                
+                # Since we're in a sync context, we can't use await
+                # Just send the signal and let the readline loop handle the termination
+                # The readline loop will detect the process termination and break
+                
+            except ProcessLookupError:
+                log_router_activity("ClaudeCLIExecutor: Process already terminated")
+            except Exception as term_err:
+                log_error(f"ClaudeCLIExecutor: Error terminating process: {term_err}")
+                # Try force kill as fallback
+                try:
+                    self.current_process.kill()
+                    log_router_activity(f"ClaudeCLIExecutor: Sent SIGKILL to process {self.current_process.pid}")
+                except Exception as kill_err:
+                    log_error(f"ClaudeCLIExecutor: Error force-killing process: {kill_err}")
+            finally:
+                # Clear the process reference
+                self.current_process = None
 
     async def execute_cli(
         self,
@@ -66,19 +107,66 @@ class ClaudeCLIExecutor:
 
         log_router_activity(f"ClaudeCLIExecutor: Attempting to start subprocess: {' '.join(cmd[:5])}...") # Log start of cmd
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
+            # Create subprocess with custom preexec function to ignore SIGINT
+            # This ensures the parent process receives CTRL+C signals
+            import sys
+            import os
+            
+            kwargs = {
+                'stdout': asyncio.subprocess.PIPE,
+                'stderr': asyncio.subprocess.PIPE
+            }
+            
+            # Create subprocess with platform-specific handling
+            if sys.platform.startswith('linux'):
+                # Linux: use preexec_fn to ignore SIGINT in the child process
+                def preexec_fn():
+                    # Ignore SIGINT in the child process
+                    import signal
+                    signal.signal(signal.SIGINT, signal.SIG_IGN)
+                kwargs['preexec_fn'] = preexec_fn
+            
+            # Create the subprocess
+            proc = await asyncio.create_subprocess_exec(*cmd, **kwargs)
             log_router_activity(f"ClaudeCLIExecutor: Subprocess started. PID: {proc.pid if proc else 'N/A'}")
+            
+            # Store the process reference for potential termination
+            self.current_process = proc
+            
+            # Verify signal handler is still active after subprocess creation
+            current_handler = signal.getsignal(signal.SIGINT)
+            log_router_activity(f"ClaudeCLIExecutor: Signal handler after subprocess creation: {current_handler}")
+            
+            # On macOS, ensure the subprocess doesn't block our signals
+            if sys.platform == 'darwin' and hasattr(signal, 'pthread_sigmask'):
+                # Check if SIGINT is blocked
+                blocked_signals = signal.pthread_sigmask(signal.SIG_BLOCK, [])
+                if signal.SIGINT in blocked_signals:
+                    log_warning("ClaudeCLIExecutor: SIGINT is blocked! Unblocking...")
+                    signal.pthread_sigmask(signal.SIG_UNBLOCK, [signal.SIGINT])
 
             stdout_lines_yielded = False
             if proc.stdout:
                 log_router_activity("ClaudeCLIExecutor: Processing stdout...")
                 while True:
                     try:
-                        line_bytes = await proc.stdout.readline()
+                        # Add timeout to readline to allow for interruption
+                        line_bytes = await asyncio.wait_for(proc.stdout.readline(), timeout=0.5)
+                    except asyncio.TimeoutError:
+                        # Check if process is still running and current_process is still set
+                        if self.current_process is None or proc.returncode is not None:
+                            log_router_activity("ClaudeCLIExecutor: Process was terminated, breaking from stdout loop")
+                            break
+                        # Also check if we should handle a pending interrupt
+                        try:
+                            # Check if there's a pending KeyboardInterrupt
+                            import select
+                            if sys.platform != 'win32' and select.select([sys.stdin], [], [], 0)[0]:
+                                # There's input waiting, might be an interrupt
+                                pass
+                        except:
+                            pass
+                        continue  # Continue reading if still running
                     except Exception as e_readline:
                         log_error(f"ClaudeCLIExecutor: Exception during proc.stdout.readline(): {e_readline}")
                         break
@@ -104,6 +192,9 @@ class ClaudeCLIExecutor:
             log_router_activity("ClaudeCLIExecutor: Waiting for Claude CLI process to exit...")
             return_code = await proc.wait()
             log_router_activity(f"ClaudeCLIExecutor: Claude CLI process finished with exit code {return_code}")
+            
+            # Clear the process reference when done
+            self.current_process = None
 
             if return_code != 0:
                 error_detail = stderr_output if stderr_output else f"CLI process exited with code {return_code}."
@@ -119,9 +210,14 @@ class ClaudeCLIExecutor:
             log_error(error_msg, "FileNotFoundError")
             yield json.dumps({"type": "error", "error": {"message": error_msg}}) + "\n"
         except Exception as e:
-            error_msg = f"ClaudeCLIExecutor: Unexpected error running Claude CLI: {str(e)}"
-            log_error(error_msg, str(e))
+            error_msg = f"ClaudeCLIExecutor: Unexpected error running Claude CLI: {repr(e)}"
+            log_error(error_msg, exception_info=repr(e))
+            import traceback
+            log_error(f"ClaudeCLIExecutor: Full traceback: {traceback.format_exc()}")
             yield json.dumps({"type": "error", "error": {"message": error_msg}}) + "\n"
+        finally:
+            # Always clear the process reference when exiting
+            self.current_process = None
 
 # Example Usage (for testing cli_agent.py directly)
 async def main_test_cli_executor():

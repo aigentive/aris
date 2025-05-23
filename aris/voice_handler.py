@@ -7,6 +7,7 @@ from typing import Optional, Tuple, Any
 from .logging_utils import log_warning, log_error, log_router_activity, log_user_command_raw_voice
 from .session_state import SessionState
 from .tts_handler import tts_speak, summarize_for_voice, _ensure_voice_dependencies, _init_openai_clients_for_tts
+from .interrupt_handler import get_interrupt_handler, InterruptContext
 
 # Dynamically loaded modules
 Recorder = None
@@ -17,6 +18,8 @@ class VoiceHandler:
     def __init__(self, trigger_words=None):
         self.trigger_words = trigger_words or []
         self.recorder_instance = None
+        self._stt_interrupt_event = asyncio.Event()
+        self._current_stt_task: Optional[asyncio.Task] = None
     
     def initialize(self):
         """
@@ -51,6 +54,16 @@ class VoiceHandler:
             except Exception as e:
                 log_error(f"Error shutting down voice recorder: {e}", exception_info=str(e))
     
+    def interrupt_stt(self):
+        """Interrupt current STT recording."""
+        log_router_activity("[STT] Interrupt requested")
+        self._stt_interrupt_event.set()
+        
+        # Cancel the current STT task if it exists
+        if self._current_stt_task and not self._current_stt_task.done():
+            log_router_activity("[STT] Cancelling current STT task")
+            self._current_stt_task.cancel()
+    
     async def handle_one_turn(self, session_state: SessionState) -> Tuple[str, SessionState]:
         """
         Process one turn in voice mode.
@@ -64,34 +77,78 @@ class VoiceHandler:
         if not self.recorder_instance:
             return 'switch_to_text', session_state
     
+        # Reset interrupt event
+        self._stt_interrupt_event.clear()
+        
+        # Store current task
+        self._current_stt_task = asyncio.current_task()
+        
+        # Get interrupt handler and register callback
+        interrupt_handler = get_interrupt_handler()
+        interrupt_handler.register_stt_callback(self.interrupt_stt)
+        
         print("Listening...", end="", flush=True)
         user_text = ""
+        
         try:
+            # Set STT context
+            interrupt_handler.set_context(InterruptContext.STT_LISTENING)
+            
             loop = asyncio.get_running_loop()
-            user_text = await loop.run_in_executor(None, self.recorder_instance.text)
-            print(f"\r\033[K🧑 User > {user_text}")
-        except KeyboardInterrupt:  # Ctrl+C during STT listening
-            from prompt_toolkit import print_formatted_text
-            from prompt_toolkit.formatted_text import FormattedText
             
-            # This import should be available as it's a direct dependency
-            try:
-                from .cli import cli_style
-            except ImportError:
-                cli_style = None
+            # Create STT task
+            stt_task = loop.create_task(
+                loop.run_in_executor(None, self.recorder_instance.text)
+            )
+            
+            # Create interrupt wait task
+            interrupt_task = asyncio.create_task(self._stt_interrupt_event.wait())
+            
+            # Wait for either STT completion or interruption
+            done, pending = await asyncio.wait(
+                [stt_task, interrupt_task],
+                return_when=asyncio.FIRST_COMPLETED
+            )
+            
+            # Cancel any pending tasks
+            for task in pending:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+            
+            if interrupt_task in done:
+                # STT was interrupted
+                log_router_activity("[STT] Recording interrupted by user")
                 
-            print_formatted_text(FormattedText([
-                ('class:warning', "\n🎙️ Voice listening cancelled. Switching to text mode.")
-            ]), style=cli_style)
-            
-            return 'switch_to_text', session_state 
-        except BrokenPipeError:  # Added handler for BrokenPipeError
+                from prompt_toolkit import print_formatted_text
+                from prompt_toolkit.formatted_text import FormattedText
+                
+                try:
+                    from .cli import cli_style
+                except ImportError:
+                    cli_style = None
+                    
+                print_formatted_text(FormattedText([
+                    ('class:warning', "\n🎙️ Voice listening cancelled. Switching to text mode.")
+                ]), style=cli_style)
+                
+                return 'switch_to_text', session_state
+            else:
+                # STT completed normally
+                user_text = await stt_task
+                print(f"\r\033[K🧑 User > {user_text}")
+                
+        except asyncio.CancelledError:
+            log_router_activity("[STT] Task cancelled")
+            return 'switch_to_text', session_state
+        except BrokenPipeError:
             log_warning("[VoiceMode] BrokenPipeError during STT, likely due to early exit/Ctrl+C. Switching to text mode.")
             
             from prompt_toolkit import print_formatted_text
             from prompt_toolkit.formatted_text import FormattedText
             
-            # This import should be available as it's a direct dependency
             try:
                 from .cli import cli_style
             except ImportError:
@@ -106,6 +163,10 @@ class VoiceHandler:
             log_error(f"Error during voice recording: {e}", exception_info=str(e))
             asyncio.create_task(tts_speak("Sorry, I had trouble capturing audio."))
             return 'continue', session_state
+        finally:
+            # Reset context back to idle
+            interrupt_handler.set_context(InterruptContext.IDLE)
+            self._current_stt_task = None
     
         if not user_text.strip():
             return 'continue', session_state

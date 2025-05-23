@@ -5,6 +5,7 @@ import os
 import sys
 import asyncio
 import threading
+import signal
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -23,9 +24,13 @@ from .interaction_handler import print_welcome_message, text_mode_one_turn
 from .voice_handler import VoiceHandler
 from .profile_manager import profile_manager
 from .profile_handler import activate_profile
+from .interrupt_handler import InterruptHandler
 
 # Global variable to indicate if full initialization is done
 _APP_INITIALIZED = False
+
+# Global interrupt handler instance
+interrupt_handler = InterruptHandler()
 
 # Define a simple style for prompt_toolkit outputs
 cli_style = Style.from_dict({
@@ -171,6 +176,44 @@ async def run_cli_orchestrator():
     This handles the application's main loop, switching between text and voice modes,
     and processing user input through the assistant.
     """
+    
+    # Initialize the global interrupt handler
+    global interrupt_handler
+    interrupt_handler.initialize()
+    
+    # Register exit callback
+    def exit_application():
+        """Callback for application exit on third CTRL+C."""
+        raise KeyboardInterrupt()
+    
+    interrupt_handler.register_exit_callback(exit_application)
+    
+    # Force re-installation of our signal handler in case asyncio overrode it
+    # This is a workaround for asyncio's signal handling behavior
+    print(f"[DEBUG] Force reinstalling signal handler: {interrupt_handler._handle_interrupt}", flush=True)
+    signal.signal(signal.SIGINT, interrupt_handler._handle_interrupt)
+    
+    # Verify installation
+    current_handler = signal.getsignal(signal.SIGINT)
+    print(f"[DEBUG] Current SIGINT handler after reinstall: {current_handler}", flush=True)
+    
+    # Start a background task to periodically check and restore our signal handler
+    async def ensure_signal_handler():
+        """Periodically check and restore our signal handler if needed."""
+        while True:
+            try:
+                await asyncio.sleep(0.5)
+                current = signal.getsignal(signal.SIGINT)
+                if current != interrupt_handler._handle_interrupt:
+                    log_debug(f"Signal handler was changed to {current}, restoring...")
+                    signal.signal(signal.SIGINT, interrupt_handler._handle_interrupt)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                log_debug(f"Error in ensure_signal_handler: {e}")
+    
+    # Start the signal handler checker
+    asyncio.create_task(ensure_signal_handler())
     
     # Determine the profile name for welcome message
     profile_name = "default"
@@ -355,6 +398,9 @@ async def run_cli_orchestrator():
 
     # --- Cleanup ---
     voice_handler.shutdown()
+    
+    # Clean up interrupt handler
+    interrupt_handler.shutdown()
     
     # Clean up context file manager
     from .context_file_manager import context_file_manager
