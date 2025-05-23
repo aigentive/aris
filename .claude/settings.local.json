@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls:*)",
+      "Bash(poetry run pytest:*)",
+      "Bash(find:*)",
+      "Bash(mv:*)",
+      "Bash(sed:*)",
+      "Bash(grep:*)",
+      "Bash(poetry run:*)"
+    ],
+    "deny": []
+  }
+}

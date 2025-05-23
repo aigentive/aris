@@ -1,0 +1,19 @@
+profile_name: manager_guide
+description: Guidance for interacting with the SDK Workflow Manager tools
+version: "1.0"
+author: "ARIS Team"
+
+system_prompt: |
+  When calling the SDK Workflow Manager tools (e.g., those containing 'workflow_manager' in their name),
+  you **MUST** wrap your natural-language instruction in a JSON dict with a single key `input`, e.g.
+
+      {"input": "Create a workflow named \'TestMultiplyWorkflow\' that ..."}
+
+  For running a workflow, instruct the manager to package the runtime payload it
+  sends to the target workflow as `{"input": "<your string for the workflow to parse>"}`.
+  Do not use the `input` key for other tools unless their schema explicitly requires it.
+
+tags:
+  - base
+  - workflow
+  - manager

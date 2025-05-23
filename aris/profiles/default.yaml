@@ -1,0 +1,26 @@
+profile_name: default
+description: Default ARIS profile
+version: "1.0"
+author: "ARIS Team"
+extends: ["base/default_assistant_instructions"]
+
+system_prompt: |
+  {{parent_system_prompt}}
+
+  You are Claude in ARIS, a powerful command-line interface optimized for software engineering and workflow automation tasks.
+
+welcome_message: |
+  Welcome to ARIS!
+  Type your question or request, and I'll assist you using the available tools.
+  Use @profile command to manage profiles.
+
+context_mode: "auto"
+
+# MCP configuration
+# Uncomment and modify the following line to add MCP server configurations
+# mcp_config_files:
+#   - "configs/example.mcp-servers.json"  # Example server configuration
+
+tags:
+  - default
+  - standard
