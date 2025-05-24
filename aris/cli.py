@@ -190,12 +190,7 @@ async def run_cli_orchestrator():
     
     # Force re-installation of our signal handler in case asyncio overrode it
     # This is a workaround for asyncio's signal handling behavior
-    print(f"[DEBUG] Force reinstalling signal handler: {interrupt_handler._handle_interrupt}", flush=True)
     signal.signal(signal.SIGINT, interrupt_handler._handle_interrupt)
-    
-    # Verify installation
-    current_handler = signal.getsignal(signal.SIGINT)
-    print(f"[DEBUG] Current SIGINT handler after reinstall: {current_handler}", flush=True)
     
     # Start a background task to periodically check and restore our signal handler
     async def ensure_signal_handler():
