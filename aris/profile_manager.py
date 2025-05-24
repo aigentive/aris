@@ -23,6 +23,24 @@ except ImportError:
 
 from .logging_utils import log_router_activity, log_error, log_warning, log_debug
 
+# Custom YAML representer for multiline strings
+class LiteralStr(str):
+    """Custom string class to force literal block scalar representation in YAML."""
+    pass
+
+def represent_literal_str(dumper, data):
+    """Custom YAML representer for literal string blocks."""
+    # Use literal block scalar style that preserves newlines
+    return dumper.represent_scalar('tag:yaml.org,2002:str', str(data), style='|')
+
+# Register the custom representer for both regular and safe dumpers
+yaml.add_representer(LiteralStr, represent_literal_str)
+try:
+    yaml.add_representer(LiteralStr, represent_literal_str, yaml.SafeDumper)
+except AttributeError:
+    # SafeDumper might not be available in all PyYAML versions
+    pass
+
 # Define constants for profile locations
 USER_PROFILES_DIR = os.path.expanduser("~/.aris")
 PROJECT_PROFILES_DIR = "./.aris"  # Relative to working directory
@@ -1137,8 +1155,11 @@ class ProfileManager:
         
         # Write profile to file
         try:
+            # Convert multiline string fields to LiteralStr for better YAML formatting
+            formatted_profile_data = self._format_multiline_strings_for_yaml(profile_data)
+            
             with open(profile_file_path, 'w', encoding='utf-8') as f:
-                yaml.dump(profile_data, f, default_flow_style=False, sort_keys=False)
+                yaml.dump(formatted_profile_data, f, default_flow_style=False, sort_keys=False)
             
             # Refresh profiles to include the new one
             self.refresh_profiles()
@@ -1151,6 +1172,36 @@ class ProfileManager:
             log_error(f"ProfileManager: Error creating profile file {profile_file_path}: {e}")
             print(f"Error: Failed to create profile file: {e}")
             return None
+    
+    def _format_multiline_strings_for_yaml(self, profile_data: Dict) -> Dict:
+        """
+        Convert multiline string fields to LiteralStr for better YAML formatting.
+        
+        This ensures that fields like system_prompt and welcome_message are written
+        as literal block scalars (|) instead of quoted strings with escape sequences.
+        
+        Args:
+            profile_data: The profile data dictionary
+            
+        Returns:
+            A new dictionary with multiline strings formatted as LiteralStr
+        """
+        import copy
+        
+        # List of fields that should use literal block scalar formatting
+        multiline_fields = {'system_prompt', 'welcome_message'}
+        
+        # Create a deep copy to avoid modifying the original
+        formatted_data = copy.deepcopy(profile_data)
+        
+        for field in multiline_fields:
+            if field in formatted_data and isinstance(formatted_data[field], str):
+                # Check if the string contains newlines or is long enough to benefit from literal formatting
+                value = formatted_data[field]
+                if '\n' in value or len(value) > 80:
+                    formatted_data[field] = LiteralStr(value)
+        
+        return formatted_data
     
     def cleanup_old_files(self, max_age_hours: int = 24):
         """
