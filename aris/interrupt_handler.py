@@ -61,11 +61,9 @@ class InterruptHandler:
         
         # Store original handler
         self._original_sigint_handler = signal.getsignal(signal.SIGINT)
-        print(f"[DEBUG] Original SIGINT handler: {self._original_sigint_handler}", flush=True)
         
         # Always use regular signal handler for better compatibility
         signal.signal(signal.SIGINT, self._handle_interrupt)
-        print(f"[DEBUG] InterruptHandler: Signal handler installed: {self._handle_interrupt}", flush=True)
         log_debug("InterruptHandler: Regular signal handler installed")
     
     def shutdown(self):
@@ -144,12 +142,8 @@ class InterruptHandler:
             signum: Signal number (SIGINT)
             frame: Current stack frame
         """
-        # Debug: Ensure handler is being called
-        print(f"\n[DEBUG] Interrupt handler called! Context: {self.current_context.value}, Count: {self.interrupt_count + 1}", flush=True)
-        
         # Prevent nested interrupt handling
         if self._handling_interrupt:
-            print("[DEBUG] Already handling interrupt, ignoring...", flush=True)
             return
         
         self._handling_interrupt = True
