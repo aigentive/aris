@@ -825,9 +825,12 @@ class ProfileManager:
             config_id = f"{profile_name}_{timestamp}_{str(uuid.uuid4())[:8]}"
             config_path = os.path.join(config_dir, f"mcp_config_{config_id}.json")
             
+            # Perform environment variable substitution before writing
+            merged_config_with_env = self._substitute_env_variables(merged_config)
+            
             # Write the merged config to the file
             with open(config_path, 'w', encoding='utf-8') as f:
-                json.dump(merged_config, f, indent=2)
+                json.dump(merged_config_with_env, f, indent=2)
             
             # Verify the file was created
             if os.path.exists(config_path):
@@ -859,6 +862,70 @@ class ProfileManager:
             import traceback
             log_error(f"ProfileManager: Traceback: {traceback.format_exc()}")
             return None
+    
+    def _substitute_env_variables(self, config: Dict) -> Dict:
+        """
+        Substitute environment variables in MCP configuration.
+        
+        Supports the following syntax:
+        - ${VAR_NAME} - substitutes with environment variable value
+        - ${VAR_NAME:-default} - substitutes with environment variable value or default if not set
+        
+        Args:
+            config: The configuration dictionary to process
+            
+        Returns:
+            A new configuration dictionary with environment variables substituted
+        """
+        import re
+        import copy
+        
+        def substitute_string(text: str) -> str:
+            """Substitute environment variables in a string."""
+            if not isinstance(text, str):
+                return text
+                
+            # Pattern to match ${VAR_NAME} or ${VAR_NAME:-default}
+            pattern = r'\$\{([^}:]+)(?::-(.*?))?\}'
+            
+            def replace_match(match):
+                var_name = match.group(1)
+                default_value = match.group(2) if match.group(2) is not None else ""
+                
+                # Get the environment variable value
+                env_value = os.getenv(var_name)
+                
+                if env_value is not None:
+                    return env_value
+                elif default_value:
+                    return default_value
+                else:
+                    # If no default and var not set, leave as-is or return empty
+                    log_warning(f"ProfileManager: Environment variable '{var_name}' not found and no default provided")
+                    return ""
+            
+            return re.sub(pattern, replace_match, text)
+        
+        def substitute_recursive(obj):
+            """Recursively substitute environment variables in nested structures."""
+            if isinstance(obj, dict):
+                return {key: substitute_recursive(value) for key, value in obj.items()}
+            elif isinstance(obj, list):
+                return [substitute_recursive(item) for item in obj]
+            elif isinstance(obj, str):
+                return substitute_string(obj)
+            else:
+                return obj
+        
+        # Create a deep copy to avoid modifying the original
+        config_copy = copy.deepcopy(config)
+        
+        # Perform substitution
+        substituted_config = substitute_recursive(config_copy)
+        
+        log_router_activity("ProfileManager: Performed environment variable substitution in MCP config")
+        
+        return substituted_config
     
     def _deep_merge_dict(self, base: Dict, overlay: Dict):
         """
