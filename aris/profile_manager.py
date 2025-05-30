@@ -200,12 +200,13 @@ class ProfileManager:
         log_router_activity(f"ProfileManager: Discovered {len(profiles)} profiles")
         return profiles
     
-    def get_profile(self, profile_ref: str, resolve: bool = True) -> Optional[Dict]:
+    def get_profile(self, profile_ref: str, resolve: bool = True, workspace_variables: Optional[Dict[str, str]] = None) -> Optional[Dict]:
         """
         Get a profile by its reference.
         Args:
             profile_ref: The profile reference in the format "dir/subdir/name" or just "name"
             resolve: Whether to resolve inheritance and return a fully resolved profile
+            workspace_variables: Optional workspace variables to inject into the profile
         
         Returns:
             The profile data as a dictionary, or None if not found
@@ -243,6 +244,10 @@ class ProfileManager:
             # Resolve inheritance if requested
             if resolve and 'extends' in profile_data and profile_data['extends']:
                 profile_data = self._resolve_inheritance(profile_data, profile_path)
+            
+            # Inject workspace variables if provided
+            if workspace_variables:
+                profile_data = self._inject_workspace_variables(profile_data, workspace_variables)
             
             # Cache the result
             self._profile_cache[cache_key] = copy.deepcopy(profile_data)
@@ -1202,6 +1207,31 @@ class ProfileManager:
                     formatted_data[field] = LiteralStr(value)
         
         return formatted_data
+    
+    def _inject_workspace_variables(self, profile_data: Dict, workspace_variables: Dict[str, str]) -> Dict:
+        """
+        Inject workspace variables into profile configuration.
+        
+        Args:
+            profile_data: The profile data dictionary
+            workspace_variables: Workspace variables to inject
+            
+        Returns:
+            Profile data with workspace variables injected
+        """
+        # Create a copy to avoid modifying the original
+        enhanced_profile = copy.deepcopy(profile_data)
+        
+        # Add workspace variables to the profile's variables
+        if 'variables' not in enhanced_profile:
+            enhanced_profile['variables'] = {}
+        
+        # Merge workspace variables (workspace variables take precedence)
+        enhanced_profile['variables'].update(workspace_variables)
+        
+        log_debug(f"ProfileManager: Injected workspace variables: {workspace_variables}")
+        
+        return enhanced_profile
     
     def cleanup_old_files(self, max_age_hours: int = 24):
         """

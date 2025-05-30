@@ -89,13 +89,15 @@ def test_session_state_get_system_prompt(mock_profile_manager):
         
         system_prompt = session.get_system_prompt()
         
-        # Check that prepare_system_prompt was called correctly
+        # Check that prepare_system_prompt was called correctly with new workspace parameters
         mock_formatter.prepare_system_prompt.assert_called_once_with(
             "You are a helpful assistant.",
             context_files=[],
             template_variables={},
             session_id=None,
-            context_mode="auto"
+            context_mode="auto",
+            workspace_path=None,
+            original_cwd=None
         )
         
         # Check that reference_file_path was set
@@ -127,13 +129,15 @@ def test_session_state_get_system_prompt_from_file(mock_profile_manager):
         # Check that load_file_content was called correctly
         mock_profile_manager.load_file_content.assert_called_once_with("/path/to/prompt.txt")
         
-        # Check that prepare_system_prompt was called correctly
+        # Check that prepare_system_prompt was called correctly with new workspace parameters
         mock_formatter.prepare_system_prompt.assert_called_once_with(
             "System prompt from file.",
             context_files=[],
             template_variables={},
             session_id=None,
-            context_mode="auto"
+            context_mode="auto",
+            workspace_path=None,
+            original_cwd=None
         )
         
         # Check that the processed prompt was returned

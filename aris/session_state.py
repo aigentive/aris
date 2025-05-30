@@ -16,6 +16,8 @@ class SessionState:
         self.reference_file_path = None  # Path to referenced context file (if any)
         self.is_new_session = True  # Flag to indicate if this is a new session
         self.has_read_reference_file = False  # Flag to track if Claude has read the reference file
+        self.workspace_path = None  # Current workspace path
+        self.original_cwd = None  # Original working directory before workspace setup
     
     def get_system_prompt(self) -> Optional[str]:
         """
@@ -52,7 +54,9 @@ class SessionState:
             context_files=context_files,
             template_variables=self.profile_variables,
             session_id=self.session_id,
-            context_mode=context_mode
+            context_mode=context_mode,
+            workspace_path=self.workspace_path,
+            original_cwd=self.original_cwd
         )
         
         # Store reference file path for first message handling

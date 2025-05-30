@@ -338,14 +338,23 @@ def activate_profile(profile_name: str, session_state: SessionState) -> bool:
         True if the profile was activated successfully, False otherwise
     """
     try:
-        profile = profile_manager.get_profile(profile_name, resolve=True)
+        # Get workspace variables from session state if available
+        workspace_variables = {}
+        if session_state.workspace_path:
+            from .workspace_manager import workspace_manager
+            workspace_variables = workspace_manager.get_workspace_variables(session_state.workspace_path)
+        
+        profile = profile_manager.get_profile(profile_name, resolve=True, workspace_variables=workspace_variables)
         if profile:
             # Get template variables
             variables = collect_template_variables(profile)
             
+            # Merge workspace variables with template variables (workspace takes precedence)
+            merged_variables = {**variables, **workspace_variables}
+            
             # Update session state
             session_state.active_profile = profile
-            session_state.profile_variables = variables
+            session_state.profile_variables = merged_variables
             
             # First, completely reset any existing MCP configuration
             # This is essential to avoid inheriting servers from previous profiles

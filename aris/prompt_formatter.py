@@ -48,13 +48,16 @@ class PromptFormatter:
         template_variables: Dict[str, str] = None,
         session_id: str = None,
         context_mode: str = "auto",
-        context_size_threshold: int = 10240  # 10KB threshold for auto mode
+        context_size_threshold: int = 10240,  # 10KB threshold for auto mode
+        workspace_path: str = None,  # Optional workspace path for enhancement
+        original_cwd: str = None  # Original working directory for comparison
     ) -> Tuple[str, Optional[str]]:
         """
         Prepares the system prompt from a profile by:
         1. Replacing template variables 
         2. Integrating content from context files
-        3. Formatting it for use with the Claude CLI's --system-prompt flag
+        3. Adding workspace context if applicable
+        4. Formatting it for use with the Claude CLI's --system-prompt flag
         
         Args:
             profile_system_prompt: The system prompt from the active profile
@@ -63,6 +66,8 @@ class PromptFormatter:
             session_id: Optional session ID for reference file naming
             context_mode: How to handle context files: 'embedded', 'referenced', or 'auto'
             context_size_threshold: Size threshold in bytes for auto mode selection
+            workspace_path: Optional workspace path for workspace context enhancement
+            original_cwd: Original working directory for workspace comparison
         
         Returns:
             Tuple of (processed_system_prompt, reference_file_path)
@@ -123,6 +128,18 @@ Use the Read tool to access this file before responding to any user query.
 """
                 processed_prompt += "\n\n" + read_instruction
                 log_debug(f"PromptFormatter: Using referenced mode, created file at {reference_file_path}")
+        
+        # Add workspace context if workspace path is provided and different from original directory
+        if workspace_path and original_cwd and workspace_path != original_cwd:
+            workspace_context = f"""
+
+## Workspace Information
+Your workspace directory is: {workspace_path}
+Use this workspace for reading previous work and saving your outputs.
+When referencing files, you can use relative paths from your workspace.
+"""
+            processed_prompt += workspace_context
+            log_debug(f"PromptFormatter: Added workspace context for: {workspace_path}")
         
         return processed_prompt, reference_file_path
     

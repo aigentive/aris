@@ -413,8 +413,8 @@ def test_activate_profile_success(
     # Verify that the function returned True
     assert result is True
     
-    # Verify that profile_manager.get_profile was called
-    mock_profile_manager.get_profile.assert_called_once_with("test_profile", resolve=True)
+    # Verify that profile_manager.get_profile was called with workspace_variables
+    mock_profile_manager.get_profile.assert_called_once_with("test_profile", resolve=True, workspace_variables={})
     
     # Verify that collect_template_variables was called
     mock_collect_variables.assert_called_once_with(profile)
@@ -444,8 +444,8 @@ def test_activate_profile_not_found(mock_print, mock_profile_manager, mock_sessi
     # Verify that the function returned False
     assert result is False
     
-    # Verify that profile_manager.get_profile was called
-    mock_profile_manager.get_profile.assert_called_once_with("nonexistent_profile", resolve=True)
+    # Verify that profile_manager.get_profile was called with workspace_variables
+    mock_profile_manager.get_profile.assert_called_once_with("nonexistent_profile", resolve=True, workspace_variables={})
     
     # Verify that print_formatted_text was called with an error message
     mock_print.assert_called_once()

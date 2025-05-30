@@ -66,6 +66,11 @@ def parse_arguments_and_configure_logging():
         default=8092,
         help="Port for the Profile MCP Server (default: 8092)"
     )
+    parser.add_argument(
+        "--workspace",
+        type=str,
+        help="Workspace directory (relative to CWD or absolute path). Creates directory if needed."
+    )
     args, _ = parser.parse_known_args()
 
     absolute_log_file_path = Path(args.log_file).resolve()

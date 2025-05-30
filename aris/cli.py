@@ -25,6 +25,7 @@ from .voice_handler import VoiceHandler
 from .profile_manager import profile_manager
 from .profile_handler import activate_profile
 from .interrupt_handler import InterruptHandler
+from .workspace_manager import workspace_manager
 
 # Global variable to indicate if full initialization is done
 _APP_INITIALIZED = False
@@ -151,12 +152,31 @@ async def fully_initialize_app_components():
     elif INITIAL_VOICE_MODE:
         log_router_activity("Voice mode starting with no specific trigger words (will process all speech).")
 
+    # Setup workspace if specified
+    workspace_path = None
+    if hasattr(PARSED_ARGS, 'workspace') and PARSED_ARGS.workspace:
+        try:
+            # Resolve and setup workspace
+            workspace_path = workspace_manager.resolve_workspace_path(PARSED_ARGS.workspace)
+            original_cwd = workspace_manager.setup_workspace(workspace_path)
+            log_router_activity(f"Workspace setup completed: {workspace_path}")
+        except Exception as e:
+            log_error(f"Failed to setup workspace '{PARSED_ARGS.workspace}': {e}")
+            print(f"Warning: Failed to setup workspace '{PARSED_ARGS.workspace}': {e}")
+            workspace_path = None
+    
     # Initialize session state for initial profile
     profile_name = PARSED_ARGS.profile if hasattr(PARSED_ARGS, 'profile') and PARSED_ARGS.profile else "default"
     log_router_activity(f"Using initial profile: {profile_name}")
     
     # Initialize session state
     initial_session = SessionState()
+    
+    # Set workspace information in session state
+    if workspace_path:
+        initial_session.workspace_path = workspace_path
+        initial_session.original_cwd = workspace_manager.original_cwd
+    
     set_current_session_state(initial_session)  # Update the global reference
     
     # If a profile was specified, activate it
@@ -400,6 +420,9 @@ async def run_cli_orchestrator():
     # Clean up context file manager
     from .context_file_manager import context_file_manager
     context_file_manager.cleanup_old_files()
+    
+    # Restore original directory if workspace was used
+    workspace_manager.restore_original_directory()
     
     print_formatted_text("-----------------------------------------------------", style=cli_style)
 
