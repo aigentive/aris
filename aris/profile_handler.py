@@ -78,28 +78,43 @@ def print_profile_list(profiles: Dict[str, Dict]):
 
 def print_profile_details(profile: Dict):
     """
-    Print detailed information about a profile.
+    Print detailed information about a profile with enhanced formatting.
     
     Args:
         profile: The profile data dictionary
     """
-    print_formatted_text(FormattedText([("bold", "\nProfile Details:")]), style=cli_style)
-    
-    # Basic profile information
+    # Header with visual separator
     print_formatted_text(FormattedText([
-        ("class:profile.name", f"Name: {profile.get('profile_name', 'Unknown')}"),
+        ("bold", "\n" + "="*80),
+        ("\n", ""),
+        ("bold", "📋 PROFILE DETAILS"),
+        ("\n", ""),
+        ("bold", "="*80)
+    ]), style=cli_style)
+    
+    # Basic profile information with icons
+    print_formatted_text(FormattedText([
+        ("bold", "\n🏷️  Name: "),
+        ("class:profile.name", f"{profile.get('profile_name', 'Unknown')}"),
     ]), style=cli_style)
     
     if profile.get('description'):
         print_formatted_text(FormattedText([
-            ("class:profile.description", f"Description: {profile.get('description')}"),
+            ("bold", "📝 Description: "),
+            ("class:profile.description", f"{profile.get('description')}"),
         ]), style=cli_style)
     
     if profile.get('version'):
-        print_formatted_text(f"Version: {profile.get('version')}", style=cli_style)
+        print_formatted_text(FormattedText([
+            ("bold", "🔢 Version: "),
+            ("", f"{profile.get('version')}")
+        ]), style=cli_style)
     
     if profile.get('author'):
-        print_formatted_text(f"Author: {profile.get('author')}", style=cli_style)
+        print_formatted_text(FormattedText([
+            ("bold", "👤 Author: "),
+            ("", f"{profile.get('author')}")
+        ]), style=cli_style)
     
     # Inheritance
     if profile.get('extends'):
@@ -108,31 +123,65 @@ def print_profile_details(profile: Dict):
             extends_str = ", ".join(extends)
         else:
             extends_str = extends
-        print_formatted_text(f"Extends: {extends_str}", style=cli_style)
+        print_formatted_text(FormattedText([
+            ("bold", "🔗 Extends: "),
+            ("class:profile.description", extends_str)
+        ]), style=cli_style)
     
-    # System prompt info
+    # System prompt - show full content with better formatting
     if profile.get('system_prompt'):
-        prompt_preview = profile.get('system_prompt', '')[:100] + "..." if len(profile.get('system_prompt', '')) > 100 else profile.get('system_prompt', '')
-        print_formatted_text(f"\nSystem Prompt: {prompt_preview}", style=cli_style)
+        system_prompt = profile.get('system_prompt', '')
+        print_formatted_text(FormattedText([
+            ("bold", "\n🧠 System Prompt:"),
+            ("\n", ""),
+            ("bold", "-" * 60)
+        ]), style=cli_style)
+        
+        # Split into lines and add slight indentation for readability
+        prompt_lines = system_prompt.split('\n')
+        for line in prompt_lines:
+            if line.strip():  # Skip empty lines for cleaner display
+                print_formatted_text(f"  {line}", style=cli_style)
+            else:
+                print()  # Keep paragraph breaks
+        
+        print_formatted_text(FormattedText([
+            ("bold", "-" * 60)
+        ]), style=cli_style)
     
     if profile.get('system_prompt_file'):
-        print_formatted_text(f"System Prompt File: {profile.get('system_prompt_file')}", style=cli_style)
+        print_formatted_text(FormattedText([
+            ("bold", "📄 System Prompt File: "),
+            ("", f"{profile.get('system_prompt_file')}")
+        ]), style=cli_style)
     
-    # Tool preferences
+    # Tool preferences with better formatting
     if profile.get('tools'):
         tools = profile.get('tools')
-        print_formatted_text(f"\nTools: {', '.join(tools)}", style=cli_style)
+        print_formatted_text(FormattedText([
+            ("bold", "\n🛠️  Tools: "),
+            ("class:profile.description", ', '.join(tools))
+        ]), style=cli_style)
     
     # Context files
     if profile.get('context_files'):
         context_files = profile.get('context_files')
-        print_formatted_text(f"\nContext Files: {', '.join(context_files)}", style=cli_style)
-        print_formatted_text(f"Context Mode: {profile.get('context_mode', 'auto')}", style=cli_style)
+        print_formatted_text(FormattedText([
+            ("bold", "\n📁 Context Files: "),
+            ("", ', '.join(context_files))
+        ]), style=cli_style)
+        print_formatted_text(FormattedText([
+            ("bold", "📂 Context Mode: "),
+            ("", f"{profile.get('context_mode', 'auto')}")
+        ]), style=cli_style)
     
     # MCP config files
     if profile.get('mcp_config_files'):
         mcp_configs = profile.get('mcp_config_files')
-        print_formatted_text(f"\nMCP Config Files: {', '.join(mcp_configs)}", style=cli_style)
+        print_formatted_text(FormattedText([
+            ("bold", "\n⚙️  MCP Config Files: "),
+            ("class:profile.description", ', '.join(mcp_configs))
+        ]), style=cli_style)
         
     # Welcome message (with variables substituted if session is active)
     if profile.get('welcome_message'):
@@ -148,14 +197,16 @@ def print_profile_details(profile: Dict):
             )
         
         print_formatted_text(FormattedText([
-            ("bold", "\nWelcome Message:"),
-            ("", f" {welcome_message}")
+            ("bold", "\n💬 Welcome Message: "),
+            ("class:profile.description", welcome_message)
         ]), style=cli_style)
     
-    # Variables
+    # Variables with enhanced formatting
     if profile.get('variables'):
         variables = profile.get('variables')
-        print_formatted_text(FormattedText([("bold", "\nTemplate Variables:")]), style=cli_style)
+        print_formatted_text(FormattedText([
+            ("bold", "\n🔧 Template Variables:")
+        ]), style=cli_style)
         for var in variables:
             if isinstance(var, dict):
                 var_name = var.get('name', 'Unknown')
@@ -171,7 +222,7 @@ def print_profile_details(profile: Dict):
                     current_value = session_state.profile_variables.get(var_name)
                 
                 print_formatted_text(FormattedText([
-                    ("class:variable.name", f"  {var_name}"),
+                    ("class:variable.name", f"  • {var_name}"),
                     ("", ": "),
                     ("class:variable.description", var_desc),
                 ]), style=cli_style)
@@ -180,6 +231,19 @@ def print_profile_details(profile: Dict):
                 def_str = f", Default: {var_default}" if var_default is not None else ""
                 curr_str = f", Current: {current_value}" if current_value else ""
                 print_formatted_text(f"    ({req_str}{def_str}{curr_str})", style=cli_style)
+
+    # Tags section
+    if profile.get('tags'):
+        tags = profile.get('tags')
+        print_formatted_text(FormattedText([
+            ("bold", "\n🏷️  Tags: "),
+            ("class:profile.tag", ', '.join(tags))
+        ]), style=cli_style)
+    
+    # Footer
+    print_formatted_text(FormattedText([
+        ("bold", "\n" + "="*80 + "\n")
+    ]), style=cli_style)
 
 def collect_template_variables(profile: Dict) -> Dict[str, str]:
     """

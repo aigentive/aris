@@ -147,8 +147,8 @@ def test_print_profile_details_complete(mock_print):
     
     # Check that all sections were printed
     sections = [
-        "Profile Details", "Complete profile with all fields", "1.0.0", "Test Author",
-        "Extends: base_profile", "System Prompt", "Tools: Tool1, Tool2",
+        "PROFILE DETAILS", "Complete profile with all fields", "1.0.0", "Test Author",
+        "base_profile", "System Prompt", "Tool1, Tool2",
         "Context Files", "MCP Config Files", "Welcome Message", "Template Variables"
     ]
     
