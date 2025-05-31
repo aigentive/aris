@@ -106,6 +106,18 @@ tools:
 mcp_config_files:
   - "configs/workflow_orchestrator.mcp-servers.json"
 
+welcome_message: |
+  🤖 Workflow Orchestrator ready!
+  
+  I coordinate multi-agent workflows using the execute_workflow_phase tool:
+  • Plan and execute sequential or parallel phases
+  • Manage shared workspace directories
+  • Coordinate file handoffs between specialized agents
+  • Handle errors and provide status updates
+  
+  Child profiles can extend me to create domain-specific orchestrators.
+  How can I help orchestrate your workflow today?
+
 tags:
   - orchestration
   - workflow
