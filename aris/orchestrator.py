@@ -300,6 +300,7 @@ async def route(
     log_router_activity(f"About to generate CLI flags with MCP config path: {mcp_config_path}")
     
     # Ensure the MCP config path is absolute and exists
+    mcp_config_data = None
     if mcp_config_path:
         # Make sure we have an absolute path
         mcp_config_abs_path = os.path.abspath(mcp_config_path)
@@ -311,12 +312,15 @@ async def route(
             try:
                 with open(mcp_config_abs_path, 'r') as f:
                     config_content = f.read()
+                    mcp_config_data = json.loads(config_content)
                 log_router_activity(f"MCP config content: {config_content[:200]}...")
+                log_router_activity(f"Parsed MCP config servers: {list(mcp_config_data.get('mcpServers', {}).keys())}")
                 
                 # Use the absolute path to ensure Claude can find it
                 mcp_config_path = mcp_config_abs_path
             except Exception as e:
-                log_warning(f"Error reading MCP config file: {e}")
+                log_warning(f"Error reading/parsing MCP config file: {e}")
+                mcp_config_data = None
         else:
             log_warning(f"MCP config file doesn't exist at: {mcp_config_abs_path}")
             
@@ -334,7 +338,8 @@ async def route(
         mcp_tools_schema=TOOLS_SCHEMA,
         system_prompt=system_prompt,
         tool_preferences=tool_preferences,
-        mcp_config_path=mcp_config_path
+        mcp_config_path=mcp_config_path,
+        mcp_config_data=mcp_config_data
     )
     
     # Execute Claude CLI with the formatted prompt and flags

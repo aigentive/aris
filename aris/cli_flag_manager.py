@@ -45,6 +45,10 @@ class CLIFlagManager:
         else:
             # Fallback to this file's directory if not provided - useful for some contexts
             self.script_dir = os.path.dirname(os.path.abspath(__file__))
+        
+        # Initialize MCP config data for tool resolution
+        self._current_mcp_config_data = None
+        
         log_debug(f"CLIFlagManager initialized. Script directory: {self.script_dir}")
 
     def _get_mcp_config_path(self) -> Optional[str]:
@@ -57,6 +61,7 @@ class CLIFlagManager:
         system_prompt: Optional[str] = None, 
         append_system_prompt: Optional[str] = None,
         mcp_config_path: Optional[str] = None,
+        mcp_config_data: Optional[Dict] = None,
         tool_preferences: Optional[List[str]] = None
     ) -> List[str]:
         """
@@ -68,12 +73,18 @@ class CLIFlagManager:
             system_prompt: Optional system prompt to use with --system-prompt flag
             append_system_prompt: Optional system prompt to append with --append-system-prompt flag
             mcp_config_path: Optional path to MCP config file (overrides default)
+            mcp_config_data: Optional parsed MCP config data for tool resolution
             tool_preferences: Optional list of tool names to filter available tools
             
         Returns:
             List of CLI flags for the Claude CLI
         """
         log_router_activity("CLIFlagManager: Generating Claude CLI flags...")
+        
+        # Store MCP config data for tool resolution
+        if mcp_config_data:
+            self._current_mcp_config_data = mcp_config_data
+            log_debug(f"CLIFlagManager: Stored MCP config data with servers: {list(mcp_config_data.get('mcpServers', {}).keys())}")
         
         flags: List[str] = [
             self.OUTPUT_FORMAT_FLAG, self.OUTPUT_FORMAT_VALUE,
@@ -101,9 +112,16 @@ class CLIFlagManager:
                     server_name = tool.get("server_name", "aigentive")
                     tool_name = tool["name"]
                     
-                    # Apply server-specific prefix
-                    prefixed_name = self.MCP_SERVER_PREFIX_FORMAT.format(server_name=server_name) + tool_name
-                    final_tools_for_claude_cli.add(prefixed_name)
+                    # Check if tool is already prefixed to avoid double-prefixing
+                    if tool_name.startswith("mcp__"):
+                        # Tool is already prefixed, use as-is
+                        final_tools_for_claude_cli.add(tool_name)
+                        log_debug(f"CLIFlagManager: Using already prefixed tool: {tool_name}")
+                    else:
+                        # Apply server-specific prefix
+                        prefixed_name = self.MCP_SERVER_PREFIX_FORMAT.format(server_name=server_name) + tool_name
+                        final_tools_for_claude_cli.add(prefixed_name)
+                        log_debug(f"CLIFlagManager: Added MCP tool with prefix: {tool_name} -> {prefixed_name}")
         
         # Add non-MCP tools
         for tool_name in self.USER_DESIRED_NON_MCP_TOOLS:
@@ -154,6 +172,12 @@ class CLIFlagManager:
                     log_debug(f"CLIFlagManager: Added exact match tool: {pref}")
                     continue
                 
+                # If the preference is already a full MCP tool name, add it directly
+                if pref.startswith("mcp__") and "__" in pref:
+                    filtered_tools.add(pref)
+                    log_debug(f"CLIFlagManager: Added already-prefixed tool preference: {pref}")
+                    continue
+                
                 # Special handling for specific server preferences like "youtube"
                 if pref.lower() in available_servers:
                     server_tools = [tool for tool in final_tools_for_claude_cli 
@@ -191,6 +215,18 @@ class CLIFlagManager:
                     if prefixed in final_tools_for_claude_cli:
                         filtered_tools.add(prefixed)
                         log_debug(f"CLIFlagManager: Added prefixed tool: {prefixed}")
+                        found_prefixed = True
+                        break
+                
+                # Try to resolve tool preferences using MCP config information
+                if not found_prefixed and hasattr(self, '_current_mcp_config_data') and self._current_mcp_config_data:
+                    mcp_servers = self._current_mcp_config_data.get('mcpServers', {})
+                    for server_name in mcp_servers.keys():
+                        potential_mcp_tool = f"mcp__{server_name}__{pref}"
+                        # Add the potential MCP tool even if not in final_tools_for_claude_cli
+                        # because MCP tools are loaded after CLI flags are generated
+                        filtered_tools.add(potential_mcp_tool)
+                        log_debug(f"CLIFlagManager: Added MCP tool from config: {pref} -> {potential_mcp_tool}")
                         found_prefixed = True
                         break
                 
@@ -246,6 +282,9 @@ class CLIFlagManager:
                             with open(mcp_config_abs_path, 'r') as f:
                                 json_content = json.load(f)
                             log_router_activity(f"CLIFlagManager: MCP config file contains valid JSON with keys: {list(json_content.keys())}")
+                            
+                            # Store MCP config data for tool resolution
+                            self._current_mcp_config_data = json_content
                             
                             # Add the MCP config flag if file is valid
                             flags.extend([self.MCP_CONFIG_FLAG, mcp_config_abs_path])

@@ -13,6 +13,18 @@ from typing import Optional, List, Tuple
 
 from prompt_toolkit import PromptSession, print_formatted_text
 from prompt_toolkit.formatted_text import FormattedText
+
+# Global server state tracking (module-level to persist across CLI lifecycle)
+_workflow_mcp_server_started = False
+_profile_mcp_server_started = False
+
+def is_workflow_mcp_server_started() -> bool:
+    """Check if workflow MCP server has been started."""
+    return _workflow_mcp_server_started
+
+def is_profile_mcp_server_started() -> bool:
+    """Check if profile MCP server has been started."""
+    return _profile_mcp_server_started
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
 from prompt_toolkit.styles import Style
@@ -617,7 +629,10 @@ async def _start_profile_mcp_server():
             # Server started successfully
             log_router_activity(f"Started Profile MCP Server on port {mcp_server.port}")
             
-            # Mark server as started in session state
+            # Mark server as started globally and in session state
+            global _profile_mcp_server_started
+            _profile_mcp_server_started = True
+            
             from .session_state import get_current_session_state
             session_state = get_current_session_state()
             if session_state:
@@ -678,7 +693,10 @@ async def _start_workflow_mcp_server():
             # Server started successfully
             log_router_activity(f"Started Workflow MCP Server on port {workflow_mcp_server.port}")
             
-            # Mark server as started in session state
+            # Mark server as started globally and in session state
+            global _workflow_mcp_server_started
+            _workflow_mcp_server_started = True
+            
             from .session_state import get_current_session_state
             session_state = get_current_session_state()
             if session_state:
