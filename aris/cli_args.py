@@ -78,19 +78,23 @@ def parse_arguments_and_configure_logging():
     )
     args, _ = parser.parse_known_args()
 
-    absolute_log_file_path = Path(args.log_file).resolve()
+    # Resolve workspace path if provided for logging configuration
+    workspace_path = None
+    if args.workspace:
+        from pathlib import Path
+        if Path(args.workspace).is_absolute():
+            workspace_path = str(Path(args.workspace).resolve())
+        else:
+            workspace_path = str(Path.cwd() / args.workspace)
+    
+    # Configure logging with workspace-aware timestamped log files
     configure_logging(
         enable_console_logging=args.verbose,
-        log_file_path=str(absolute_log_file_path)
+        log_file_path=args.log_file,
+        workspace_path=workspace_path
     )
-
-    # Clear the log file AFTER logging is configured and path is known
-    try: 
-        current_log_path = absolute_log_file_path
-        current_log_path.write_text("") 
-        log_router_activity(f"Log file '{str(current_log_path)}' cleared/initialized.")
-    except Exception as e_clear_log:
-        log_error(f"Could not clear/initialize log file '{str(current_log_path)}': {e_clear_log}")
+    
+    log_router_activity(f"ARIS logging initialized with timestamped log file")
 
     # Set global flags based on args
     if args.voice:

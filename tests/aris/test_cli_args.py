@@ -52,10 +52,12 @@ def test_parse_arguments_and_configure_logging_defaults(
 
     mock_configure_logging.assert_called_once_with(
         enable_console_logging=False,
-        log_file_path=str(expected_log_file)
+        log_file_path="aris_run.log",
+        workspace_path=None
     )
-    mock_write_text.assert_called_once_with("") # Log file cleared
-    mock_log_router.assert_called_with(f"Log file '{str(expected_log_file)}' cleared/initialized.")
+    # Log file clearing is no longer done - timestamped files are created instead
+    mock_write_text.assert_not_called()
+    mock_log_router.assert_called_with("ARIS logging initialized with timestamped log file")
 
 @patch("aris.cli_args.configure_logging")
 @patch("aris.cli_args.Path.write_text")
@@ -89,10 +91,12 @@ def test_parse_arguments_custom_values(
 
     mock_configure_logging.assert_called_once_with(
         enable_console_logging=True,
-        log_file_path=str(expected_log_file)
+        log_file_path=custom_log_filename,
+        workspace_path=None
     )
-    mock_write_text.assert_called_once_with("")
-    mock_log_router.assert_called_with(f"Log file '{str(expected_log_file)}' cleared/initialized.")
+    # Log file clearing is no longer done - timestamped files are created instead
+    mock_write_text.assert_not_called()
+    mock_log_router.assert_called_with("ARIS logging initialized with timestamped log file")
 
 @patch("aris.cli_args.configure_logging")
 @patch("aris.cli_args.Path.write_text", side_effect=IOError("Disk full"))
@@ -110,10 +114,12 @@ def test_parse_arguments_log_clear_fails(
     
     mock_configure_logging.assert_called_once_with(
         enable_console_logging=False,
-        log_file_path=str(expected_log_file)
+        log_file_path="aris_run.log",
+        workspace_path=None
     )
-    mock_write_text_raiser.assert_called_once_with("")
-    mock_log_err.assert_called_once_with(f"Could not clear/initialize log file '{str(expected_log_file)}': Disk full")
+    # Log file clearing is no longer done - timestamped files are created instead
+    mock_write_text_raiser.assert_not_called()
+    mock_log_err.assert_not_called()  # No error since we don't clear log files anymore
 
 @patch("aris.cli_args.load_dotenv")
 @patch("aris.cli_args.find_dotenv")

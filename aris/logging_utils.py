@@ -29,20 +29,63 @@ LOG_LEVELS = {
 _CONSOLE_LOGGING_ENABLED = False
 _LOG_FILE_PATH = "aris_run.log" # Default log file name
 
-def configure_logging(enable_console_logging: bool, log_file_path: str = "aris_run.log"):
-    """Configures logging behavior (console and file)."""
+def create_timestamped_log_path(base_log_file: str = "aris_run.log", workspace_path: str = None) -> str:
+    """
+    Create a timestamped log file path with optional workspace support.
+    
+    Args:
+        base_log_file: Base log file name or path
+        workspace_path: Optional workspace path to create logs within
+        
+    Returns:
+        str: Absolute path to timestamped log file
+    """
+    # Generate timestamp for filename
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    # Extract base name without extension
+    if "." in base_log_file:
+        name_part, ext_part = base_log_file.rsplit(".", 1)
+        timestamped_filename = f"{name_part}_{timestamp}.{ext_part}"
+    else:
+        timestamped_filename = f"{base_log_file}_{timestamp}.log"
+    
+    # Determine logs directory location
+    if workspace_path:
+        # Create logs directory within workspace
+        logs_dir = os.path.join(workspace_path, "logs")
+    else:
+        # Create logs directory in current working directory
+        logs_dir = os.path.join(os.getcwd(), "logs")
+    
+    # Create logs directory if it doesn't exist
+    try:
+        os.makedirs(logs_dir, exist_ok=True)
+    except Exception as e:
+        # Fallback to current directory if logs dir creation fails
+        print(f"{RED}[LOGGING_ERROR] Failed to create logs directory {logs_dir}: {e}. Using current directory.{RESET}", file=sys.stderr)
+        logs_dir = os.getcwd()
+    
+    # Return absolute path to timestamped log file
+    log_file_path = os.path.join(logs_dir, timestamped_filename)
+    return os.path.abspath(log_file_path)
+
+def configure_logging(enable_console_logging: bool, log_file_path: str = "aris_run.log", workspace_path: str = None):
+    """Configures logging behavior (console and file) with timestamped log files."""
     global _CONSOLE_LOGGING_ENABLED, _LOG_FILE_PATH
     _CONSOLE_LOGGING_ENABLED = enable_console_logging
-    _LOG_FILE_PATH = log_file_path # This should be an absolute path when called from cli.py
+    
+    # Create timestamped log path
+    _LOG_FILE_PATH = create_timestamped_log_path(log_file_path, workspace_path)
     
     timestamp = datetime.now().isoformat()
     console_status = "enabled" if _CONSOLE_LOGGING_ENABLED else "disabled"
-    # This initial log should also go to stderr for visibility during debugging if file fails
-    # init_log_message = f"{timestamp} [INFO] Logging configured by configure_logging. Console: {console_status}. Target Log File: {_LOG_FILE_PATH}"
-    # print(f"[DEBUG_LOGGING_INIT] {init_log_message}", file=sys.stderr) # Removed
+    
     try:
-        with open(_LOG_FILE_PATH, "a", encoding="utf-8") as f:
+        with open(_LOG_FILE_PATH, "w", encoding="utf-8") as f:  # Use 'w' to create new file
             f.write(f"{timestamp} [INFO] Logging configured by configure_logging. Console: {console_status}. Target Log File: {_LOG_FILE_PATH}\n")
+            if workspace_path:
+                f.write(f"{timestamp} [INFO] Workspace-aware logging enabled. Workspace: {workspace_path}\n")
     except Exception as e:
         print(f"{RED}{timestamp} [LOGGING_ERROR] INITIALIZATION: Failed to write to log file {_LOG_FILE_PATH}: {e}{RESET}", file=sys.stderr)
 
@@ -118,6 +161,10 @@ def log_user_command_raw_text(message: str):
 def log_user_command_raw_voice(message: str):
     """Logs the raw user voice command text without additional color formatting for easier parsing."""
     _log_message("USER_COMMAND_RAW_VOICE", message)
+
+def get_current_log_file_path() -> str:
+    """Returns the current log file path."""
+    return _LOG_FILE_PATH
 
 # Example usage (optional, can be removed or kept for testing)
 if __name__ == '__main__':
