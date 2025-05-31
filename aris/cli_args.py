@@ -71,6 +71,11 @@ def parse_arguments_and_configure_logging():
         type=str,
         help="Workspace directory (relative to CWD or absolute path). Creates directory if needed."
     )
+    parser.add_argument(
+        "--input",
+        type=str,
+        help="Input message for non-interactive mode. Executes single turn and exits."
+    )
     args, _ = parser.parse_known_args()
 
     absolute_log_file_path = Path(args.log_file).resolve()

@@ -64,11 +64,26 @@ def main():
     loop.set_exception_handler(exception_handler)
     
     try:
+        # Check for non-interactive mode BEFORE initializing components
+        from .cli_args import PARSED_ARGS
+        from .cli import detect_execution_mode, execute_non_interactive_mode
+        
+        mode, user_input = detect_execution_mode(PARSED_ARGS)
+        
+        # Set global flag to suppress interactive output if in non-interactive mode
+        if mode == "non_interactive":
+            import aris.cli
+            aris.cli._SUPPRESS_INTERACTIVE_OUTPUT = True
+        
         # Initialize components
         loop.run_until_complete(fully_initialize_app_components())
         
-        # Run main orchestrator
-        loop.run_until_complete(run_cli_orchestrator())
+        if mode == "non_interactive":
+            # Run non-interactive mode
+            loop.run_until_complete(execute_non_interactive_mode(user_input))
+        else:
+            # Run main orchestrator (interactive mode)
+            loop.run_until_complete(run_cli_orchestrator())
     except KeyboardInterrupt:
         from prompt_toolkit import print_formatted_text
         from prompt_toolkit.formatted_text import FormattedText

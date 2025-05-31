@@ -6,9 +6,10 @@ import sys
 import asyncio
 import threading
 import signal
+import json
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List, Tuple
 
 from prompt_toolkit import PromptSession, print_formatted_text
 from prompt_toolkit.formatted_text import FormattedText
@@ -32,6 +33,158 @@ _APP_INITIALIZED = False
 
 # Global interrupt handler instance
 interrupt_handler = InterruptHandler()
+
+# Global flag to suppress interactive output in non-interactive mode
+_SUPPRESS_INTERACTIVE_OUTPUT = False
+
+
+def detect_execution_mode(args) -> Tuple[str, Optional[str]]:
+    """
+    Determine execution mode based on input sources.
+    
+    Priority:
+    1. --input flag (explicit non-interactive)
+    2. stdin input available (automatic non-interactive)  
+    3. default (interactive mode)
+    
+    Returns:
+        Tuple of (mode, input_text) where mode is 'interactive' or 'non_interactive'
+    """
+    # Check for explicit --input flag (including empty strings)
+    if hasattr(args, 'input') and args.input is not None:
+        return "non_interactive", args.input
+    
+    # Check if stdin has input available
+    if not sys.stdin.isatty():
+        try:
+            stdin_input = sys.stdin.read().strip()
+            if stdin_input:
+                return "non_interactive", stdin_input
+        except Exception as e:
+            log_error(f"Failed to read from stdin: {e}")
+    
+    return "interactive", None
+
+
+def parse_claude_response_stream(response_chunks: List[str]) -> str:
+    """
+    Parse Claude CLI JSON stream IDENTICALLY to how interactive mode handles it.
+    
+    This preserves the EXACT SAME response processing logic.
+    """
+    response_content = []
+    final_result = None
+    
+    for chunk in response_chunks:
+        if not chunk.strip():
+            continue
+            
+        try:
+            # Parse each JSON chunk exactly like interactive mode
+            data = json.loads(chunk)
+            
+            # Handle all the same event types as interactive mode
+            if data.get('type') == 'text':
+                # Main response content
+                response_content.append(data.get('text', ''))
+            elif data.get('type') == 'assistant':
+                # Assistant message with content
+                message = data.get('message', {})
+                content = message.get('content', [])
+                for item in content:
+                    if item.get('type') == 'text':
+                        response_content.append(item.get('text', ''))
+            elif data.get('type') == 'result':
+                # Final result from Claude CLI - use this as the authoritative response
+                result_text = data.get('result', '')
+                if result_text:
+                    final_result = result_text
+            elif data.get('type') == 'tool_use':
+                # Tool usage events (preserve all tool functionality)
+                # In non-interactive, we don't show tool usage but tools still execute
+                pass
+            elif data.get('type') == 'error':
+                # Error handling (preserve all error reporting)
+                error_msg = data.get('error', {}).get('message', 'Unknown error')
+                raise RuntimeError(f"Claude error: {error_msg}")
+            # Add handling for other event types as needed
+            
+        except json.JSONDecodeError:
+            # Handle malformed JSON (same as interactive)
+            continue
+        except Exception as e:
+            # Preserve all error handling from interactive mode
+            raise
+    
+    # Return the final result if available (most authoritative), otherwise assembled content
+    if final_result:
+        return final_result.strip()
+    else:
+        return "".join(response_content).strip()
+
+
+async def execute_single_turn(user_input: str, session_state) -> str:
+    """
+    Execute single request/response turn using IDENTICAL logic to interactive mode.
+    
+    This uses the EXACT SAME route() function that interactive mode uses.
+    """
+    from .orchestrator import route
+    
+    # Use IDENTICAL route call as in text_mode_one_turn
+    response_chunks = []
+    
+    async for chunk in route(
+        user_msg_for_turn=user_input,
+        claude_session_to_resume=session_state.session_id,  # Support session resumption
+        tool_preferences=session_state.get_tool_preferences(),
+        system_prompt=session_state.get_system_prompt(),
+        reference_file_path=session_state.reference_file_path,
+        is_first_message=session_state.is_first_message()
+    ):
+        response_chunks.append(chunk)
+    
+    # Parse the IDENTICAL JSON stream that interactive mode receives
+    return parse_claude_response_stream(response_chunks)
+
+
+async def execute_non_interactive_mode(user_input: str):
+    """
+    Execute non-interactive mode with FULL functionality parity.
+    
+    This must preserve ALL core functionality from interactive mode.
+    """
+    exit_code = 0
+    
+    try:
+        # Get current session state (should be set up by fully_initialize_app_components)
+        from .session_state import get_current_session_state
+        session_state = get_current_session_state()
+        
+        if not session_state:
+            log_error("Session state not initialized for non-interactive mode")
+            print("Error: Session state not initialized", file=sys.stderr)
+            exit_code = 1
+            return
+        
+        # Execute single turn using SAME route function as interactive
+        response = await execute_single_turn(user_input, session_state)
+        
+        # Output response to stdout
+        print(response)
+        
+    except Exception as e:
+        # Log error and exit with error code
+        log_error(f"Non-interactive execution failed: {e}")
+        print(f"Error: {e}", file=sys.stderr)
+        exit_code = 1
+    finally:
+        # IDENTICAL cleanup to interactive mode
+        workspace_manager.restore_original_directory()
+    
+    # Exit with appropriate code
+    log_debug(f"About to exit non-interactive mode with code: {exit_code}")
+    sys.exit(exit_code)
 
 # Define a simple style for prompt_toolkit outputs
 cli_style = Style.from_dict({

@@ -470,23 +470,30 @@ def activate_profile(profile_name: str, session_state: SessionState) -> bool:
             # Mark session as new to trigger first message handling
             session_state.is_new_session = True
             
-            # Show welcome message with variables substituted
-            if profile.get("welcome_message"):
-                # Use the prompt formatter to substitute variables in welcome message
-                from .prompt_formatter import prompt_formatter_instance
-                welcome_message = profile.get("welcome_message")
-                # Apply variable substitution to welcome message
-                welcome_message, _ = prompt_formatter_instance.prepare_system_prompt(
-                    welcome_message,
-                    template_variables=session_state.profile_variables
-                )
-                print_formatted_text(FormattedText([
-                    ("bold fg:blue", welcome_message)
-                ]), style=cli_style)
-            else:
-                print_formatted_text(FormattedText([
-                    ("bold fg:blue", f"Profile '{profile_name}' activated.")
-                ]), style=cli_style)
+            # Show welcome message with variables substituted (only in interactive mode)
+            try:
+                from .cli import _SUPPRESS_INTERACTIVE_OUTPUT
+                suppress_output = _SUPPRESS_INTERACTIVE_OUTPUT
+            except ImportError:
+                suppress_output = False
+                
+            if not suppress_output:
+                if profile.get("welcome_message"):
+                    # Use the prompt formatter to substitute variables in welcome message
+                    from .prompt_formatter import prompt_formatter_instance
+                    welcome_message = profile.get("welcome_message")
+                    # Apply variable substitution to welcome message
+                    welcome_message, _ = prompt_formatter_instance.prepare_system_prompt(
+                        welcome_message,
+                        template_variables=session_state.profile_variables
+                    )
+                    print_formatted_text(FormattedText([
+                        ("bold fg:blue", welcome_message)
+                    ]), style=cli_style)
+                else:
+                    print_formatted_text(FormattedText([
+                        ("bold fg:blue", f"Profile '{profile_name}' activated.")
+                    ]), style=cli_style)
                 
             return True
         else:

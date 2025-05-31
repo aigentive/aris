@@ -29,6 +29,53 @@ poetry run python -m aris --voice
 
 # Enable verbose logging
 poetry run python -m aris --verbose
+
+# Non-interactive mode (single turn execution)
+poetry run python -m aris --input "Your task or question here"
+
+# Non-interactive with profile and workspace
+poetry run python -m aris --profile researcher --workspace my-project --input "Research AI trends"
+
+# Pipeline mode using stdin
+echo "Write a blog post about AI" | poetry run python -m aris --profile writer --workspace content
+```
+
+### Non-Interactive Mode
+
+ARIS supports non-interactive mode for single-turn execution, perfect for automation, scripting, and MCP orchestration workflows.
+
+```bash
+# Direct input execution
+poetry run python -m aris --input "Explain quantum computing"
+
+# Combined with profiles and workspaces
+poetry run python -m aris --profile researcher --workspace research-project --input "Research quantum computing applications"
+
+# Piped input (automatic non-interactive detection)
+echo "Create a Python script to parse CSV files" | poetry run python -m aris --profile developer
+
+# MCP orchestration example
+poetry run python -m aris --profile strategist --workspace campaign --input "Create content strategy from research findings"
+```
+
+### MCP Orchestration Workflows
+
+Non-interactive mode enables powerful multi-agent workflows where MCP tools can orchestrate between different ARIS profiles:
+
+```python
+# Example MCP tool for workflow orchestration
+@mcp.tool()
+def execute_workflow_phase(profile: str, workspace: str, instruction: str):
+    """Execute ARIS profile phase for workflow orchestration."""
+    cmd = ["poetry", "run", "python", "-m", "aris", "--profile", profile, "--workspace", workspace, "--input", instruction]
+    
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    
+    return {
+        "success": result.returncode == 0,
+        "response": result.stdout,
+        "error": result.stderr
+    }
 ```
 
 ### Testing

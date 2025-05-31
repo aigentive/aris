@@ -570,20 +570,28 @@ class ProfileMCPServer:
         logger.info(f"Listening on: {base_url} (Accessible via http://{accessible_host}:{self.port})")
         logger.info(f"=> Primary Client SSE Endpoint URL: {accessible_sse_url}")
         logger.info(f"=> Client Message POST URL:        {accessible_post_url}")
-        print("-"*70)
-        print("Configuration Instructions for MCP Clients (like Cursor, BoltAI, etc.):")
-        print("1. Ensure this server process is running.")
-        print(f"2. To configure Cursor, add or update your '.cursor/mcp.json' file (typically in your user or project directory)")
-        print(f"   with the following structure. You can adjust the server name key ('{self.mcp_app.name}') as needed:")
-        print("\n" + cursor_config_str + "\n")
-        print(f"3. For other MCP clients, refer to their documentation for adding an existing HTTP/SSE MCP server.")
-        print(f"   Use the SSE Endpoint URL: {accessible_sse_url}")
-        print("4. Once connected, the client can discover capabilities. For this server, this includes:")
-        print(f"   - A tool named 'get_profile_mcp_config' to get full server configuration and all tool schemas.")
-        for tool_name in self.mcp_app.tools:
-            if tool_name != "get_profile_mcp_config":
-                print(f"   - A tool named '{tool_name}' for profile management.")
-        print("-"*70)
+        # Only print configuration instructions in interactive mode
+        try:
+            from .cli import _SUPPRESS_INTERACTIVE_OUTPUT
+            suppress_output = _SUPPRESS_INTERACTIVE_OUTPUT
+        except ImportError:
+            suppress_output = False
+            
+        if not suppress_output:
+            print("-"*70)
+            print("Configuration Instructions for MCP Clients (like Cursor, BoltAI, etc.):")
+            print("1. Ensure this server process is running.")
+            print(f"2. To configure Cursor, add or update your '.cursor/mcp.json' file (typically in your user or project directory)")
+            print(f"   with the following structure. You can adjust the server name key ('{self.mcp_app.name}') as needed:")
+            print("\n" + cursor_config_str + "\n")
+            print(f"3. For other MCP clients, refer to their documentation for adding an existing HTTP/SSE MCP server.")
+            print(f"   Use the SSE Endpoint URL: {accessible_sse_url}")
+            print("4. Once connected, the client can discover capabilities. For this server, this includes:")
+            print(f"   - A tool named 'get_profile_mcp_config' to get full server configuration and all tool schemas.")
+            for tool_name in self.mcp_app.tools:
+                if tool_name != "get_profile_mcp_config":
+                    print(f"   - A tool named '{tool_name}' for profile management.")
+            print("-"*70)
     
     def _execute_main_blocking_logic(self):
         """The core synchronous logic to run Uvicorn."""
