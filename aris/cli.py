@@ -300,6 +300,60 @@ async def fully_initialize_app_components():
             log_error(f"Failed to start Profile MCP Server: {e}")
             print(f"Warning: Failed to start Profile MCP Server: {e}")
     
+    # Start Workflow MCP Server by default unless explicitly disabled
+    if not getattr(PARSED_ARGS, 'no_workflow_mcp_server', False):
+        try:
+            from .workflow_mcp_server import WorkflowMCPServer
+            
+            # Create an event to signal when the server is ready
+            workflow_server_ready_event = threading.Event()
+            workflow_server_error_msg = [None]  # Use a list to store error message by reference
+            
+            # Define a function to run the server and set the event when ready
+            def run_workflow_server_with_signal(server, ready_event, error_msg):
+                try:
+                    import uvicorn
+                    uvicorn.run(
+                        server.starlette_app,
+                        host=server.host,
+                        port=server.port,
+                        log_level="warning"
+                    )
+                except Exception as e:
+                    error_msg[0] = str(e)
+                finally:
+                    # Signal that we're done trying to start the server
+                    ready_event.set()
+            
+            # Start the Workflow MCP server in a separate thread
+            workflow_mcp_server = WorkflowMCPServer(port=8093)
+            workflow_server_thread = threading.Thread(
+                target=run_workflow_server_with_signal, 
+                args=(workflow_mcp_server, workflow_server_ready_event, workflow_server_error_msg),
+                daemon=True
+            )
+            workflow_server_thread.start()
+            
+            # Wait for up to 3 seconds for the server to start
+            workflow_server_ready = workflow_server_ready_event.wait(3.0)
+            
+            if workflow_server_error_msg[0]:
+                # Server encountered an error
+                log_error(f"Failed to start Workflow MCP Server: {workflow_server_error_msg[0]}")
+                if getattr(PARSED_ARGS, 'verbose', False):
+                    print(f"Warning: Failed to start Workflow MCP Server: {workflow_server_error_msg[0]}")
+            else:
+                # Server started successfully
+                log_router_activity(f"Started Workflow MCP Server on port {workflow_mcp_server.port}")
+                
+                # Only print info to console if verbose mode is enabled
+                if getattr(PARSED_ARGS, 'verbose', False):
+                    print(f"Workflow MCP Server started on http://localhost:{workflow_mcp_server.port}")
+        except Exception as e:
+            log_error(f"Failed to start Workflow MCP Server: {e}")
+            if getattr(PARSED_ARGS, 'verbose', False):
+                print(f"Warning: Failed to start Workflow MCP Server: {e}")
+    
     if INITIAL_VOICE_MODE and TRIGGER_WORDS:
         log_router_activity(f"Voice mode starting with trigger words: {TRIGGER_WORDS}")
     elif INITIAL_VOICE_MODE:

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "workflow_orchestrator": {
+      "type": "sse",
+      "url": "http://127.0.0.1:8093/mcp/sse/"
+    }
+  }
+}

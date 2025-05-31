@@ -425,12 +425,17 @@ class ProfileManager:
                                 new_list.append(item)
                         result[key] = new_list
                 else:
-                    # No directive, use default strategy (append with unique)
-                    new_list = copy.deepcopy(result[key])
-                    for item in value:
-                        if item not in new_list:
-                            new_list.append(item)
-                    result[key] = new_list
+                    # Handle special case: empty list in child should preserve parent list
+                    if not value:  # Empty list in child
+                        # Keep the parent list - don't replace with empty
+                        pass  # result[key] already has the parent list
+                    else:
+                        # No directive, use default strategy (append with unique)
+                        new_list = copy.deepcopy(result[key])
+                        for item in value:
+                            if item not in new_list:
+                                new_list.append(item)
+                        result[key] = new_list
             elif isinstance(value, dict) and isinstance(result[key], dict):
                 # Dict merge strategy: deep merge
                 result[key] = self._merge_profiles(result[key], value)  # Recursive merge
