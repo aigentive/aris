@@ -25,11 +25,11 @@ class TestWorkflowMCPServer:
         server = WorkflowMCPServer(port=8094)
         
         tool_def = server.mcp_app.tools["execute_workflow_phase"]
-        assert tool_def.name == "execute_workflow_phase"
-        assert "Execute an ARIS profile" in tool_def.description
+        assert "Execute an ARIS profile" in tool_def["description"]
+        assert tool_def["handler"] == server._handle_execute_workflow_phase
         
         # Check required parameters
-        schema = tool_def.inputSchema
+        schema = tool_def["input_schema"]
         required_params = schema["required"]
         assert "profile" in required_params
         assert "workspace" in required_params
@@ -52,11 +52,11 @@ class TestWorkflowMCPServer:
         mock_result.stderr = ""
         
         with patch('aris.workflow_mcp_server.subprocess.run', return_value=mock_result):
-            result = await server._handle_execute_workflow_phase({
-                "profile": "test_profile",
-                "workspace": "test_workspace",
-                "instruction": "Test instruction"
-            })
+            result = await server._handle_execute_workflow_phase(
+                profile="test_profile",
+                workspace="test_workspace",
+                instruction="Test instruction"
+            )
             
             # Check result format
             assert len(result) == 1
@@ -83,11 +83,11 @@ class TestWorkflowMCPServer:
         mock_result.stderr = "Profile not found"
         
         with patch('aris.workflow_mcp_server.subprocess.run', return_value=mock_result):
-            result = await server._handle_execute_workflow_phase({
-                "profile": "nonexistent_profile",
-                "workspace": "test_workspace", 
-                "instruction": "Test instruction"
-            })
+            result = await server._handle_execute_workflow_phase(
+                profile="nonexistent_profile",
+                workspace="test_workspace", 
+                instruction="Test instruction"
+            )
             
             # Parse JSON result
             import json
@@ -105,12 +105,12 @@ class TestWorkflowMCPServer:
         from subprocess import TimeoutExpired
         
         with patch('aris.workflow_mcp_server.subprocess.run', side_effect=TimeoutExpired("cmd", 1)):
-            result = await server._handle_execute_workflow_phase({
-                "profile": "test_profile",
-                "workspace": "test_workspace",
-                "instruction": "Test instruction",
-                "timeout": 1
-            })
+            result = await server._handle_execute_workflow_phase(
+                profile="test_profile",
+                workspace="test_workspace",
+                instruction="Test instruction",
+                timeout=1
+            )
             
             # Parse JSON result
             import json
@@ -308,14 +308,14 @@ class TestOrchestrationErrorHandling:
         """Test workflow MCP tool with invalid arguments."""
         server = WorkflowMCPServer(port=8096)
         
-        # Test missing required arguments
-        result = await server._handle_execute_workflow_phase({})
+        # Test through MCP call interface with missing arguments
+        result = await server._handle_mcp_call_tool("execute_workflow_phase", {})
         
         # Should return error result
         import json
         result_data = json.loads(result[0].text)
-        assert result_data["success"] is False
-        assert "error" in result_data
+        assert result_data["tool_execution_error"] is True
+        assert "HandlerExecutionError" in result_data["error_type"]
     
     @pytest.mark.asyncio
     async def test_workflow_mcp_unknown_tool(self):
@@ -328,7 +328,8 @@ class TestOrchestrationErrorHandling:
         import json
         result_data = json.loads(result[0].text)
         assert result_data["tool_execution_error"] is True
-        assert "Unknown workflow tool" in result_data["error"]
+        assert result_data["error_type"] == "ToolNotFound"
+        assert "Tool 'unknown_tool' not found" in result_data["message"]
     
     def test_profile_inheritance_error_handling(self):
         """Test error handling in profile inheritance."""

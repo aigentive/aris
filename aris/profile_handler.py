@@ -405,6 +405,46 @@ def activate_profile(profile_name: str, session_state: SessionState) -> bool:
             # Update global session state reference
             set_current_session_state(session_state)
             
+            # Conditionally start MCP servers if the profile needs them
+            try:
+                from .mcp_startup_analyzer import MCPStartupAnalyzer
+                from .cli import _start_profile_mcp_server, _start_workflow_mcp_server
+                from .cli_args import PARSED_ARGS
+                
+                # Analyze what MCP servers this profile needs
+                mcp_requirements = MCPStartupAnalyzer.analyze_profile_mcp_requirements(profile_name)
+                
+                # Determine which servers should start
+                should_start_profile_mcp = MCPStartupAnalyzer.should_start_profile_mcp_server(mcp_requirements, PARSED_ARGS)
+                should_start_workflow_mcp = MCPStartupAnalyzer.should_start_workflow_mcp_server(mcp_requirements, PARSED_ARGS)
+                
+                # Log startup decision
+                MCPStartupAnalyzer.log_startup_decision(
+                    mcp_requirements, 
+                    should_start_profile_mcp, 
+                    should_start_workflow_mcp,
+                    verbose=getattr(PARSED_ARGS, 'verbose', False)
+                )
+                
+                # Start servers if needed (asynchronously to avoid blocking)
+                if should_start_profile_mcp:
+                    log_router_activity("Starting Profile MCP Server for profile switch")
+                    task = asyncio.create_task(_start_profile_mcp_server())
+                    task.add_done_callback(lambda t: log_router_activity("Profile MCP Server startup completed") if not t.exception() else log_warning(f"Profile MCP Server startup failed: {t.exception()}"))
+                
+                if should_start_workflow_mcp:
+                    log_router_activity("Starting Workflow MCP Server for profile switch")
+                    task = asyncio.create_task(_start_workflow_mcp_server())
+                    task.add_done_callback(lambda t: log_router_activity("Workflow MCP Server startup completed") if not t.exception() else log_warning(f"Workflow MCP Server startup failed: {t.exception()}"))
+                
+                # Give servers a moment to start before trying to connect
+                if should_start_profile_mcp or should_start_workflow_mcp:
+                    import time
+                    time.sleep(2)  # Brief pause to allow server startup
+                    
+            except Exception as e:
+                log_warning(f"Error in conditional MCP server startup during profile switch: {e}")
+            
             # Reload MCP service with the new config
             try:
                 # Avoid circular import by using a direct import from cc_so_orchestrator

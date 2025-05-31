@@ -93,46 +93,64 @@ class WorkflowMCPServer:
                 except json.JSONDecodeError:
                     pass  # Not a JSON error structure, assume not an error
             
-            return mcp_types.CallToolResult(content=tool_results_content, isError=is_error)
-
+            return mcp_types.ServerResult(
+                mcp_types.CallToolResult(content=list(tool_results_content), isError=is_error) 
+            )
+        self.mcp_app.request_handlers[mcp_types.CallToolRequest] = call_tool_request_handler_adapter
+        
+        # Adapter for ListToolsRequest
         async def list_tools_request_handler_adapter(req: mcp_types.ListToolsRequest):
-            # Get tool definitions from our custom store
-            tools = list(self.mcp_app.tools.values())
-            return mcp_types.ListToolsResult(tools=tools)
-
-        # Configure MCP server handlers
-        self.mcp_app.call_tool = call_tool_request_handler_adapter
-        self.mcp_app.list_tools = list_tools_request_handler_adapter
+            tool_defs = await self._handle_list_tools()
+            return mcp_types.ServerResult(mcp_types.ListToolsResult(tools=tool_defs))
+        self.mcp_app.request_handlers[mcp_types.ListToolsRequest] = list_tools_request_handler_adapter
 
     def _setup_starlette_app(self):
         """Set up the Starlette ASGI application with routing."""
-        async def health_check(request: Request):
-            return PlainTextResponse(f"Workflow MCP Server running (SDK: {self._sdk_version})")
-
-        async def mcp_sse_endpoint(request: Request):
-            """Handle SSE connections for MCP communication."""
-            return EventSourceResponse(self.sse_transport.handle_sse_request(request, self.mcp_app))
-
-        async def mcp_messages_endpoint(request: Request):
-            """Handle HTTP POST messages for MCP communication."""
-            return await self.sse_transport.handle_post_message(request, self.mcp_app)
-
-        routes = [
-            Route("/", health_check, methods=["GET"]),
-            Route("/mcp/sse/", mcp_sse_endpoint),
-            Route("/mcp/messages/", mcp_messages_endpoint, methods=["POST"])
+        # Define the raw ASGI app for SSE connections
+        async def sse_endpoint_asgi_app(scope, receive, send):
+            if scope["path"] == "/mcp/sse/" or scope["path"] == "/mcp/sse":
+                # Ensure tools are registered if needed
+                if not self.mcp_app.tools:
+                    logger.info("SSE ASGI App: No tools registered, registering workflow tools.")
+                    self._register_workflow_tools()
+                
+                init_options = self.mcp_app.create_initialization_options()
+                try:
+                    async with self.sse_transport.connect_sse(scope, receive, send) as streams:
+                        await self.mcp_app.run(streams[0], streams[1], init_options)
+                except Exception as e:
+                    logger.error(f"Error during SSE handling or mcp_app.run: {e}", exc_info=True)
+                    pass
+            else:
+                logger.warning(f"sse_endpoint_asgi_app (mounted at /mcp/sse/) received unexpected internal scope path: {scope['path']}. Expected '/mcp/sse/' or '/mcp/sse'")
+                response = PlainTextResponse("Not Found in SSE handler (bad internal path)", status_code=404)
+                await response(scope, receive, send)
+        
+        mcp_routes = [
+            Mount("/sse/", app=sse_endpoint_asgi_app),
+            Mount("/messages/", app=self.sse_transport.handle_post_message)
         ]
-
-        self.starlette_app = Starlette(routes=routes)
+        mcp_sub_app = Starlette(routes=mcp_routes)
+        
+        # The main app mounts the sub_app at /mcp
+        self.starlette_app = Starlette(
+            routes=[
+                Mount("/mcp", app=mcp_sub_app),
+            ]
+        )
+        logger.info("Starlette app configured with a sub-app for /mcp, containing /sse and /messages endpoints.")
 
     def _register_workflow_tools(self):
         """Register all workflow orchestration tools."""
         
-        # Register execute_workflow_phase tool
-        execute_workflow_phase_tool = mcp_types.Tool(
-            name="execute_workflow_phase",
-            description="Execute an ARIS profile with workspace support for workflow orchestration",
-            inputSchema={
+        # Register execute_workflow_phase tool using same pattern as profile MCP server
+        if "execute_workflow_phase" in self.mcp_app.tools:
+            logger.warning("Tool definition for 'execute_workflow_phase' already exists. Overwriting.")
+            
+        self.mcp_app.tools["execute_workflow_phase"] = {
+            "handler": self._handle_execute_workflow_phase,
+            "description": "Execute an ARIS profile with workspace support for workflow orchestration",
+            "input_schema": {
                 "type": "object",
                 "properties": {
                     "profile": {
@@ -155,56 +173,77 @@ class WorkflowMCPServer:
                 },
                 "required": ["profile", "workspace", "instruction"]
             }
-        )
-        self.mcp_app.tools["execute_workflow_phase"] = execute_workflow_phase_tool
+        }
         logger.info("Registered execute_workflow_phase tool")
+
+    async def _handle_list_tools(self) -> list[mcp_types.Tool]:
+        """Handle the ListTools request and return all available tools."""
+        tools_list = []
+        logger.debug(f"Preparing tool list. Found {len(self.mcp_app.tools)} tools in internal dict.")
+        for tool_name, tool_def_dict in self.mcp_app.tools.items():
+            logger.debug(f"Processing tool '{tool_name}' for ListTools response.")
+            if "input_schema" not in tool_def_dict:
+                logger.error(f"CRITICAL: 'input_schema' key MISSING from tool_def_dict for tool '{tool_name}'!")
+                # Skip this tool if schema is missing to avoid validation error
+                continue
+            try:
+                # Use the correct key expected by mcp.types.Tool (camelCase)
+                tool_instance = mcp_types.Tool(
+                    name=tool_name,
+                    description=tool_def_dict.get("description", ""),
+                    inputSchema=tool_def_dict.get("input_schema", {}) # Correct key: inputSchema
+                )
+                tools_list.append(tool_instance)
+            except Exception as e:
+                logger.error(f"Pydantic validation failed for tool '{tool_name}'. Error: {e}", exc_info=True)
+                # Skip adding invalid tool
+                continue
+                
+        return tools_list
 
     async def _handle_mcp_call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> List[mcp_types.TextContent]:
         """Handle MCP tool calls and route them to appropriate handlers."""
+        logger.debug(f"Workflow MCP Server received call_tool request for tool: '{tool_name}' with arguments: {arguments}")
+        
+        # Log available tool keys for debugging
+        available_tool_keys = list(self.mcp_app.tools.keys())
+        logger.debug(f"Available tool keys at time of call: {available_tool_keys}")
+        
+        tool_definition = self.mcp_app.tools.get(tool_name)
+        
+        if not tool_definition:
+            logger.error(f"Tool '{tool_name}' not found in available keys: {available_tool_keys}")
+            return [mcp_types.TextContent(type="text", text=json.dumps({
+                "tool_execution_error": True,
+                "error_type": "ToolNotFound",
+                "message": f"Tool '{tool_name}' not found."
+            }))]
+        
+        handler = tool_definition.get("handler")
+        if not handler or not callable(handler):
+            logger.error(f"Handler for tool '{tool_name}' is missing or not callable.")
+            return [mcp_types.TextContent(type="text", text=json.dumps({
+                "tool_execution_error": True,
+                "error_type": "InvalidHandler",
+                "message": f"Handler for tool '{tool_name}' is invalid."
+            }))]
+        
         try:
-            log_debug(f"Workflow MCP tool call: {tool_name} with args: {arguments}")
-            
-            if tool_name == "execute_workflow_phase":
-                return await self._handle_execute_workflow_phase(arguments)
-            else:
-                error_msg = f"Unknown workflow tool: {tool_name}"
-                log_error(error_msg)
-                return [mcp_types.TextContent(
-                    type="text",
-                    text=json.dumps({
-                        "tool_execution_error": True,
-                        "error": error_msg,
-                        "available_tools": list(self.mcp_app.tools.keys())
-                    }, indent=2)
-                )]
-                
+            # Debug logging for the tool arguments
+            logger.debug(f"Calling tool '{tool_name}' with arguments: {arguments}")
+            # Unpack arguments into the handler
+            return await handler(**arguments)
         except Exception as e:
-            error_msg = f"Error executing workflow tool {tool_name}: {str(e)}"
-            log_error(error_msg)
-            return [mcp_types.TextContent(
-                type="text",
-                text=json.dumps({
-                    "tool_execution_error": True,
-                    "error": error_msg,
-                    "tool_name": tool_name
-                }, indent=2)
-            )]
+            logger.error(f"Unexpected error executing handler for tool '{tool_name}': {e}", exc_info=True)
+            return [mcp_types.TextContent(type="text", text=json.dumps({
+                "tool_execution_error": True,
+                "error_type": "HandlerExecutionError",
+                "message": str(e)
+            }))]
 
-    async def _handle_execute_workflow_phase(self, arguments: Dict[str, Any]) -> List[mcp_types.TextContent]:
+    async def _handle_execute_workflow_phase(self, profile: str, workspace: str, instruction: str, timeout: int = 300) -> List[mcp_types.TextContent]:
         """Execute an ARIS profile with workspace support for workflow orchestration."""
         try:
-            profile = arguments.get("profile")
-            workspace = arguments.get("workspace") 
-            instruction = arguments.get("instruction")
-            timeout = arguments.get("timeout", 300)
-            
-            # Validate required arguments
-            if not profile:
-                raise ValueError("profile parameter is required")
-            if not workspace:
-                raise ValueError("workspace parameter is required")
-            if not instruction:
-                raise ValueError("instruction parameter is required")
             
             log_debug(f"Executing workflow phase: profile={profile}, workspace={workspace}")
             
@@ -252,12 +291,12 @@ class WorkflowMCPServer:
             error_result = {
                 "success": False,
                 "status": "timeout",
-                "profile": arguments.get("profile", "unknown"),
-                "workspace": arguments.get("workspace", "unknown"),
+                "profile": profile,
+                "workspace": workspace,
                 "error": f"Execution timed out after {timeout} seconds",
                 "timeout": timeout
             }
-            log_error(f"Workflow phase timed out: {arguments.get('profile')}")
+            log_error(f"Workflow phase timed out: {profile}")
             return [mcp_types.TextContent(
                 type="text", 
                 text=json.dumps(error_result, indent=2)
@@ -267,8 +306,8 @@ class WorkflowMCPServer:
             error_result = {
                 "success": False,
                 "status": "error", 
-                "profile": arguments.get("profile", "unknown"),
-                "workspace": arguments.get("workspace", "unknown"),
+                "profile": profile,
+                "workspace": workspace,
                 "error": str(e)
             }
             log_error(f"Error executing workflow phase: {e}")
