@@ -287,9 +287,13 @@ async def fully_initialize_app_components():
             print(f"Warning: MCP analysis failed, starting all servers: {e}")
         
         # Fallback to unconditional startup if analysis fails
-        if not PARSED_ARGS.no_profile_mcp_server:
+        # Check session state to avoid double startup
+        from .session_state import get_current_session_state
+        session_state = get_current_session_state()
+        
+        if not PARSED_ARGS.no_profile_mcp_server and (not session_state or not session_state.profile_mcp_server_started):
             await _start_profile_mcp_server()
-        if not getattr(PARSED_ARGS, 'no_workflow_mcp_server', False):
+        if not getattr(PARSED_ARGS, 'no_workflow_mcp_server', False) and (not session_state or not session_state.workflow_mcp_server_started):
             await _start_workflow_mcp_server()
     
     if INITIAL_VOICE_MODE and TRIGGER_WORDS:
@@ -613,6 +617,12 @@ async def _start_profile_mcp_server():
             # Server started successfully
             log_router_activity(f"Started Profile MCP Server on port {mcp_server.port}")
             
+            # Mark server as started in session state
+            from .session_state import get_current_session_state
+            session_state = get_current_session_state()
+            if session_state:
+                session_state.profile_mcp_server_started = True
+            
             # Only print info to console if verbose mode is enabled
             if getattr(PARSED_ARGS, 'verbose', False):
                 print(f"Profile MCP Server started on http://localhost:{mcp_server.port}")
@@ -648,7 +658,7 @@ async def _start_workflow_mcp_server():
                 ready_event.set()
         
         # Start the Workflow MCP server in a separate thread
-        workflow_mcp_server = WorkflowMCPServer(port=8093)
+        workflow_mcp_server = WorkflowMCPServer(port=8095)
         workflow_server_thread = threading.Thread(
             target=run_workflow_server_with_signal, 
             args=(workflow_mcp_server, workflow_server_ready_event, workflow_server_error_msg),
@@ -667,6 +677,12 @@ async def _start_workflow_mcp_server():
         else:
             # Server started successfully
             log_router_activity(f"Started Workflow MCP Server on port {workflow_mcp_server.port}")
+            
+            # Mark server as started in session state
+            from .session_state import get_current_session_state
+            session_state = get_current_session_state()
+            if session_state:
+                session_state.workflow_mcp_server_started = True
             
             # Only print info to console if verbose mode is enabled
             if getattr(PARSED_ARGS, 'verbose', False):

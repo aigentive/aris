@@ -183,18 +183,24 @@ class CLIFlagManager:
                             filtered_tools.update(matching_tools)
                             log_debug(f"CLIFlagManager: Added matching server tools: {matching_tools}")
                             continue
-                        
-                        # If still no match, just add the original preference
-                        filtered_tools.add(pref)
-                        log_debug(f"CLIFlagManager: Added tool preference as-is: {pref}")
                 
                 # Check if a full prefixed version of this tool exists
+                found_prefixed = False
                 for server_name in available_servers:
                     prefixed = self.MCP_SERVER_PREFIX_FORMAT.format(server_name=server_name) + pref
                     if prefixed in final_tools_for_claude_cli:
                         filtered_tools.add(prefixed)
                         log_debug(f"CLIFlagManager: Added prefixed tool: {prefixed}")
-                        continue
+                        found_prefixed = True
+                        break
+                
+                if found_prefixed:
+                    continue
+                
+                # If no prefixed version found, add the original preference 
+                # (this handles non-MCP tools and direct tool names)
+                filtered_tools.add(pref)
+                log_debug(f"CLIFlagManager: Added non-prefixed tool preference: {pref}")
             
             # Use filtered tools if we found matches, otherwise keep all tools
             if filtered_tools:

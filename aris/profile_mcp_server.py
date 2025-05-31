@@ -36,7 +36,7 @@ class ProfileMCPServer:
     
     def __init__(self, 
                  host: str = "0.0.0.0", 
-                 port: int = 8092,
+                 port: int = 8094,
                  profile_manager_instance = None):
         """
         Initialize the Profile MCP Server.

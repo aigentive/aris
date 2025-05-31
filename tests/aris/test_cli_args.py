@@ -45,7 +45,7 @@ def test_parse_arguments_and_configure_logging_defaults(
     assert args.verbose is False
     assert args.log_file == "aris_run.log" # Default name before resolve
     assert args.no_profile_mcp_server is False
-    assert args.profile_mcp_port == 8092 # Default port
+    assert args.profile_mcp_port == 8094 # Default port
     assert cli_args.INITIAL_VOICE_MODE is False
     assert cli_args.TEXT_MODE_TTS_ENABLED is False
     assert cli_args.TRIGGER_WORDS == ["claude", "cloud", "clod", "clawd", "clode", "clause"]

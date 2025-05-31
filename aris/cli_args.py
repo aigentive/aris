@@ -63,8 +63,8 @@ def parse_arguments_and_configure_logging():
     parser.add_argument(
         "--profile-mcp-port",
         type=int,
-        default=8092,
-        help="Port for the Profile MCP Server (default: 8092)"
+        default=8094,
+        help="Port for the Profile MCP Server (default: 8094)"
     )
     parser.add_argument(
         "--workspace",

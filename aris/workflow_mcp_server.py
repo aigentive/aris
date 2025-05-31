@@ -37,7 +37,7 @@ class WorkflowMCPServer:
     
     def __init__(self, 
                  host: str = "0.0.0.0", 
-                 port: int = 8093):
+                 port: int = 8095):
         """
         Initialize the Workflow MCP Server.
         

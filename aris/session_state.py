@@ -18,6 +18,10 @@ class SessionState:
         self.has_read_reference_file = False  # Flag to track if Claude has read the reference file
         self.workspace_path = None  # Current workspace path
         self.original_cwd = None  # Original working directory before workspace setup
+        
+        # MCP server state tracking
+        self.workflow_mcp_server_started = False  # Track if workflow MCP server is running
+        self.profile_mcp_server_started = False   # Track if profile MCP server is running
     
     def get_system_prompt(self) -> Optional[str]:
         """

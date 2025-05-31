@@ -246,7 +246,7 @@ class TestWorkflowMCPConfig:
         
         server_config = config['mcpServers']['workflow_orchestrator']
         assert server_config['type'] == 'sse'
-        assert 'http://127.0.0.1:8093/mcp/sse/' in server_config['url']
+        assert 'http://127.0.0.1:8095/mcp/sse/' in server_config['url']
 
 
 class TestOrchestrationIntegration:
