@@ -136,8 +136,8 @@ def parse_claude_response_stream(response_chunks: List[str]) -> str:
         return "".join(response_content).strip()
 
 
-def format_non_interactive_response(response: str, session_state) -> str:
-    """Format response for non-interactive mode with profile awareness and proper formatting"""
+def format_non_interactive_response(response: str, session_state, progress_tracker=None) -> str:
+    """Enhanced response formatting with session insights if available"""
     if not response.strip():
         return ""
     
@@ -168,6 +168,35 @@ def format_non_interactive_response(response: str, session_state) -> str:
                 formatted_lines.append(" " * prefix_length + line)
             else:
                 formatted_lines.append("")  # Preserve empty lines
+    
+    # Add completion summary if insights are available
+    if progress_tracker and hasattr(progress_tracker, 'get_completion_summary'):
+        summary = progress_tracker.get_completion_summary()
+        if summary and summary.get("metrics"):
+            metrics = summary["metrics"]
+            
+            # Add metrics footer for significant operations
+            if metrics.get("total_cost", 0) > 0.05 or metrics.get("files_created", 0) > 0:
+                footer_parts = []
+                
+                if metrics.get("total_cost", 0) > 0:
+                    footer_parts.append(f"💰 ${metrics['total_cost']:.2f}")
+                
+                if metrics.get("duration_seconds", 0) > 10:
+                    duration = metrics["duration_seconds"]
+                    if duration >= 60:
+                        footer_parts.append(f"⏱️ {int(duration//60)}m {int(duration%60)}s")
+                    else:
+                        footer_parts.append(f"⏱️ {int(duration)}s")
+                
+                if metrics.get("files_created", 0) > 0:
+                    footer_parts.append(f"📁 {metrics['files_created']} files created")
+                
+                if metrics.get("files_modified", 0) > 0:
+                    footer_parts.append(f"✏️ {metrics['files_modified']} files updated")
+                
+                if footer_parts:
+                    formatted_lines.append(f"\n📈 Session metrics: {' • '.join(footer_parts)}")
     
     return '\n'.join(formatted_lines)
 
@@ -210,8 +239,15 @@ async def execute_non_interactive_mode(user_input: str):
     from .cli_args import PARSED_ARGS
     verbose_mode = PARSED_ARGS and PARSED_ARGS.verbose
     
+    # Insights enabled by default, only disabled if flag is present
+    enable_insights = not getattr(PARSED_ARGS, 'disable_insights', False)
+    
     # Create progress tracker for non-interactive mode
-    progress_tracker = create_progress_tracker(interactive=False, verbose=verbose_mode)
+    progress_tracker = create_progress_tracker(
+        interactive=False, 
+        verbose=verbose_mode,
+        enable_insights=enable_insights
+    )
     progress_tracker.start_display()
     
     try:
@@ -231,7 +267,7 @@ async def execute_non_interactive_mode(user_input: str):
         response = await execute_single_turn(user_input, session_state, progress_tracker)
         
         # Format and output response to stdout with profile awareness
-        formatted_response = format_non_interactive_response(response, session_state)
+        formatted_response = format_non_interactive_response(response, session_state, progress_tracker)
         print(formatted_response)
         
         # Mark completion

@@ -360,14 +360,21 @@ async def route(
         shared_flags=cli_flags,
         session_to_resume=claude_session_to_resume
     ):
-        # Update progress with real-time details from the chunk
-        if progress_tracker:
+        # Enhanced progress tracking with optional insights
+        if progress_tracker and hasattr(progress_tracker, 'process_chunk_with_insights'):
+            try:
+                detail = progress_tracker.process_chunk_with_insights(chunk)
+                if detail:
+                    progress_tracker.update_detail(detail)
+            except Exception as e:
+                log_debug(f"Error processing chunk insights: {e}")
+        elif progress_tracker:
+            # Existing behavior preserved
             try:
                 detail = parse_chunk_for_progress_detail(chunk)
                 if detail:
                     progress_tracker.update_detail(detail)
             except Exception as e:
-                # Don't let progress tracking errors break the main flow
                 log_debug(f"Error updating progress tracker: {e}")
         
         yield chunk

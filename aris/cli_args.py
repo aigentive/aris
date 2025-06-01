@@ -76,6 +76,11 @@ def parse_arguments_and_configure_logging():
         type=str,
         help="Input message for non-interactive mode. Executes single turn and exits."
     )
+    parser.add_argument(
+        "--disable-insights", 
+        action="store_true", 
+        help="Disable actionable insights and workspace monitoring"
+    )
     args, _ = parser.parse_known_args()
 
     # Resolve workspace path if provided for logging configuration

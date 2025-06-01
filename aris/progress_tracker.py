@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Optional, List, Dict, Any
 
 from .logging_utils import log_debug
+from .session_insights import SessionInsightsCollector
 
 
 class ExecutionPhase(Enum):
@@ -45,7 +46,7 @@ class ProgressTracker:
     - Non-interactive mode: Shows progress updates on new lines
     """
     
-    def __init__(self, interactive: bool = True, show_progress: bool = True):
+    def __init__(self, interactive: bool = True, show_progress: bool = True, enable_insights: bool = True):
         self.interactive = interactive
         self.show_progress = show_progress
         self.current_state = ProgressState(ExecutionPhase.INITIALIZING)
@@ -55,6 +56,17 @@ class ProgressTracker:
         
         # Track phase history for debugging
         self.phase_history: List[ProgressState] = []
+        
+        # Optional session insights (workspace monitoring always available since ARIS always has workspace)
+        if enable_insights:
+            try:
+                self.insights_collector = SessionInsightsCollector()
+            except Exception as e:
+                log_debug(f"Failed to initialize insights collector: {e}")
+                self.insights_collector = None
+        else:
+            self.insights_collector = None
+        self._pending_insights: List[Dict[str, Any]] = []
         
     def update_phase(self, phase: ExecutionPhase, detail: str = ""):
         """Update the current execution phase"""
@@ -163,6 +175,79 @@ class ProgressTracker:
             summary_lines.append(f"{state.phase.value}{detail_suffix}{duration}")
             
         return "\n".join(summary_lines)
+    
+    def process_chunk_with_insights(self, chunk: str) -> Optional[str]:
+        """
+        Process chunk for both standard progress details and optional insights.
+        Falls back to standard behavior if insights not enabled.
+        """
+        # Always get standard progress detail
+        progress_detail = parse_chunk_for_progress_detail(chunk)
+        
+        # Only collect insights if insights collector is available
+        if self.insights_collector:
+            try:
+                # Collect insights
+                insight = self.insights_collector.process_chunk(chunk)
+                if insight:
+                    self._pending_insights.append(insight)
+                    
+                    # Show immediate insights
+                    if insight.get("show_immediately"):
+                        self._display_insight(insight)
+                
+                # Check workspace changes periodically
+                workspace_insight = self.insights_collector.check_workspace_changes()
+                if workspace_insight:
+                    self._display_insight(workspace_insight)
+                
+                # Check for periodic progress insights
+                progress_insight = self.insights_collector.get_current_progress_insight()
+                if progress_insight:
+                    self._display_progress_insight(progress_insight)
+            except Exception as e:
+                # Don't let insights errors break standard progress tracking
+                log_debug(f"Error in insights collection: {e}")
+        
+        return progress_detail
+    
+    def _display_insight(self, insight: Dict[str, Any]):
+        """Display an actionable insight"""
+        if not self.show_progress:
+            return
+            
+        insight_type = insight.get("type", "")
+        message = insight.get("message", "")
+        
+        # Choose appropriate emoji and formatting
+        emoji_map = {
+            "resource_insight": "🔗",
+            "timing_insight": "⏱️",
+            "external_operation_insight": "🔌", 
+            "workspace_insight": "📁",
+            "completion_summary": "✅"
+        }
+        
+        emoji = emoji_map.get(insight_type, "ℹ️")
+        print(f"{emoji} {message}", flush=True)
+    
+    def _display_progress_insight(self, message: str):
+        """Display periodic progress insight"""
+        if self.show_progress:
+            print(f"📊 {message}", flush=True)
+    
+    def get_completion_summary(self) -> Optional[Dict[str, Any]]:
+        """Get final completion summary (only available if insights enabled)"""
+        if not self.insights_collector:
+            return None
+            
+        completion_insights = [i for i in self._pending_insights if i.get("type") == "completion_summary"]
+        return completion_insights[-1] if completion_insights else None
+    
+    def has_insights(self) -> bool:
+        """Check if this tracker has insights capabilities enabled"""
+        return self.insights_collector is not None
+
 
 
 def parse_chunk_for_progress_detail(chunk: str) -> Optional[str]:
@@ -262,18 +347,19 @@ def parse_chunk_for_progress_detail(chunk: str) -> Optional[str]:
     return None
 
 
-def create_progress_tracker(interactive: bool = True, verbose: bool = False) -> ProgressTracker:
+def create_progress_tracker(interactive: bool = True, verbose: bool = False, enable_insights: bool = True) -> ProgressTracker:
     """
-    Factory function to create a progress tracker based on mode.
+    Create progress tracker with optional session insights and workspace monitoring.
     
     Args:
         interactive: Whether running in interactive mode
         verbose: Whether to show progress (disabled if verbose logging is on)
-    
+        enable_insights: Whether to enable insights collection and workspace monitoring (default: True)
+        
     Returns:
-        ProgressTracker instance configured for the mode
+        ProgressTracker instance with insights enabled if requested
     """
     # If verbose logging is enabled, don't show progress to avoid interference
     show_progress = not verbose
     
-    return ProgressTracker(interactive=interactive, show_progress=show_progress)
+    return ProgressTracker(interactive=interactive, show_progress=show_progress, enable_insights=enable_insights)
