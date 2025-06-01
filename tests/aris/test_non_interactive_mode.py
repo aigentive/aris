@@ -120,9 +120,30 @@ class TestNonInteractiveExecution:
             
             await execute_non_interactive_mode(user_input)
             
-            # Verify execution
-            mock_execute.assert_called_once_with(user_input, mock_session)
-            mock_print.assert_called_once_with("test response")
+            # Verify execution (with progress_tracker)
+            assert mock_execute.call_count == 1
+            call_args = mock_execute.call_args[0]
+            assert call_args[0] == user_input  # user_input
+            assert call_args[1] == mock_session  # session_state
+            # Third argument should be a progress_tracker
+            assert len(call_args) == 3
+            from aris.progress_tracker import ProgressTracker
+            assert isinstance(call_args[2], ProgressTracker)
+            
+            # Check that the formatted response is printed (along with progress updates)
+            assert mock_print.call_count >= 3  # Progress messages + final response
+            
+            # Check for progress messages
+            progress_calls = [call for call in mock_print.call_args_list if call[1].get('flush')]
+            assert len(progress_calls) >= 2  # Should have some progress updates
+            
+            # Check the final formatted response (last non-flush call)
+            response_calls = [call for call in mock_print.call_args_list if not call[1].get('flush')]
+            assert len(response_calls) == 1
+            printed_output = response_calls[0][0][0]
+            assert "test response" in printed_output  # The original response should be in the formatted output
+            assert "🤖" in printed_output  # Should have the emoji prefix
+            
             mock_exit.assert_called_once_with(0)
             mock_workspace.restore_original_directory.assert_called_once()
     
@@ -169,8 +190,16 @@ class TestNonInteractiveExecution:
             
             await execute_non_interactive_mode(user_input)
             
-            # Verify error handling
-            mock_print.assert_called_once_with("Error: Test error", file=sys.stderr)
+            # Verify error handling (account for progress tracking prints)
+            # Should have progress prints plus the error print
+            assert mock_print.call_count >= 3
+            
+            # Check that the error was printed to stderr
+            error_calls = [call for call in mock_print.call_args_list 
+                          if len(call[0]) > 0 and "Error: Test error" in str(call[0][0])]
+            assert len(error_calls) == 1
+            assert error_calls[0][1]['file'] == sys.stderr
+            
             mock_exit.assert_called_once_with(1)
             mock_workspace.restore_original_directory.assert_called_once()
 
@@ -205,15 +234,18 @@ class TestSingleTurnExecution:
             
             result = await execute_single_turn(user_input, mock_session)
             
-            # Verify route was called with correct parameters
-            mock_route.assert_called_once_with(
-                user_msg_for_turn=user_input,
-                claude_session_to_resume="test_session",
-                tool_preferences=["tool1", "tool2"],
-                system_prompt="system prompt",
-                reference_file_path="/path/to/ref.txt",
-                is_first_message=False
-            )
+            # Verify route was called with correct parameters (including progress_tracker)
+            mock_route.assert_called_once()
+            call_args = mock_route.call_args
+            assert call_args[1]['user_msg_for_turn'] == user_input
+            assert call_args[1]['claude_session_to_resume'] == "test_session"
+            assert call_args[1]['tool_preferences'] == ["tool1", "tool2"]
+            assert call_args[1]['system_prompt'] == "system prompt"
+            assert call_args[1]['reference_file_path'] == "/path/to/ref.txt"
+            assert call_args[1]['is_first_message'] == False
+            # Check that progress_tracker was passed (defaults to None when called directly)
+            assert 'progress_tracker' in call_args[1]
+            assert call_args[1]['progress_tracker'] is None  # Default when called without progress_tracker
             
             assert result == "Hello world!"
     
@@ -338,7 +370,15 @@ class TestNonInteractiveIntegration:
             
             await execute_non_interactive_mode(test_input)
             
-            mock_execute.assert_called_once_with(test_input, mock_session)
+            # Check that execute_single_turn was called with correct arguments (including progress_tracker)
+            assert mock_execute.call_count == 1
+            call_args = mock_execute.call_args[0]
+            assert call_args[0] == test_input  # user_input
+            assert call_args[1] == mock_session  # session_state
+            # Third argument should be a progress_tracker
+            assert len(call_args) == 3
+            from aris.progress_tracker import ProgressTracker
+            assert isinstance(call_args[2], ProgressTracker)
 
 
 class TestNonInteractiveEdgeCases:

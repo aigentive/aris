@@ -228,16 +228,20 @@ class TestClaudeCLIIntegrationParity:
             
             result = await execute_single_turn(user_input, session_state)
             
-            # Verify route was called with correct parameters
+            # Verify route was called with correct parameters (including progress_tracker)
             # Note: For new session, is_first_message() returns True
-            mock_route.assert_called_once_with(
-                user_msg_for_turn=user_input,
-                claude_session_to_resume=session_state.session_id,
-                tool_preferences=session_state.get_tool_preferences(),
-                system_prompt=session_state.get_system_prompt(),
-                reference_file_path=session_state.reference_file_path,
-                is_first_message=True  # New session defaults to True
-            )
+            mock_route.assert_called_once()
+            call_args = mock_route.call_args
+            assert call_args[1]['user_msg_for_turn'] == user_input
+            assert call_args[1]['claude_session_to_resume'] == session_state.session_id
+            assert call_args[1]['tool_preferences'] == session_state.get_tool_preferences()
+            assert call_args[1]['system_prompt'] == session_state.get_system_prompt()
+            assert call_args[1]['reference_file_path'] == session_state.reference_file_path
+            assert call_args[1]['is_first_message'] == True  # New session defaults to True
+            # Check that progress_tracker was passed
+            assert 'progress_tracker' in call_args[1]
+            from aris.progress_tracker import ProgressTracker
+            assert call_args[1]['progress_tracker'] is None  # Default case when not provided
             
             assert result == "Hello world!"
     

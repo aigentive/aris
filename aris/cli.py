@@ -39,6 +39,7 @@ from .profile_manager import profile_manager
 from .profile_handler import activate_profile
 from .interrupt_handler import InterruptHandler
 from .workspace_manager import workspace_manager
+from .progress_tracker import create_progress_tracker, ExecutionPhase
 
 # Global variable to indicate if full initialization is done
 _APP_INITIALIZED = False
@@ -135,7 +136,43 @@ def parse_claude_response_stream(response_chunks: List[str]) -> str:
         return "".join(response_content).strip()
 
 
-async def execute_single_turn(user_input: str, session_state) -> str:
+def format_non_interactive_response(response: str, session_state) -> str:
+    """Format response for non-interactive mode with profile awareness and proper formatting"""
+    if not response.strip():
+        return ""
+    
+    # Get active profile info
+    profile_name = "aris"
+    if session_state and hasattr(session_state, 'active_profile'):
+        profile = session_state.active_profile
+        if profile and profile.get('profile_name'):
+            profile_name = profile['profile_name']
+    
+    # Split response into lines for formatting
+    lines = response.strip().split('\n')
+    if not lines:
+        return ""
+    
+    formatted_lines = []
+    
+    # First line gets profile prefix with emoji
+    first_line = lines[0]
+    formatted_lines.append(f"🤖 {profile_name}: {first_line}")
+    
+    # Subsequent lines get proper indentation to align with content
+    if len(lines) > 1:
+        for line in lines[1:]:
+            if line.strip():  # Only indent non-empty lines
+                # Calculate indent to align with the content after the prefix
+                prefix_length = len(f"🤖 {profile_name}: ")
+                formatted_lines.append(" " * prefix_length + line)
+            else:
+                formatted_lines.append("")  # Preserve empty lines
+    
+    return '\n'.join(formatted_lines)
+
+
+async def execute_single_turn(user_input: str, session_state, progress_tracker=None) -> str:
     """
     Execute single request/response turn using IDENTICAL logic to interactive mode.
     
@@ -152,7 +189,8 @@ async def execute_single_turn(user_input: str, session_state) -> str:
         tool_preferences=session_state.get_tool_preferences(),
         system_prompt=session_state.get_system_prompt(),
         reference_file_path=session_state.reference_file_path,
-        is_first_message=session_state.is_first_message()
+        is_first_message=session_state.is_first_message(),
+        progress_tracker=progress_tracker
     ):
         response_chunks.append(chunk)
     
@@ -168,7 +206,17 @@ async def execute_non_interactive_mode(user_input: str):
     """
     exit_code = 0
     
+    # Check if verbose mode is enabled
+    from .cli_args import PARSED_ARGS
+    verbose_mode = PARSED_ARGS and PARSED_ARGS.verbose
+    
+    # Create progress tracker for non-interactive mode
+    progress_tracker = create_progress_tracker(interactive=False, verbose=verbose_mode)
+    progress_tracker.start_display()
+    
     try:
+        progress_tracker.update_phase(ExecutionPhase.INITIALIZING, "Setting up session")
+        
         # Get current session state (should be set up by fully_initialize_app_components)
         from .session_state import get_current_session_state
         session_state = get_current_session_state()
@@ -180,10 +228,14 @@ async def execute_non_interactive_mode(user_input: str):
             return
         
         # Execute single turn using SAME route function as interactive
-        response = await execute_single_turn(user_input, session_state)
+        response = await execute_single_turn(user_input, session_state, progress_tracker)
         
-        # Output response to stdout
-        print(response)
+        # Format and output response to stdout with profile awareness
+        formatted_response = format_non_interactive_response(response, session_state)
+        print(formatted_response)
+        
+        # Mark completion
+        progress_tracker.update_phase(ExecutionPhase.DONE)
         
     except Exception as e:
         # Log error and exit with error code
@@ -191,6 +243,9 @@ async def execute_non_interactive_mode(user_input: str):
         print(f"Error: {e}", file=sys.stderr)
         exit_code = 1
     finally:
+        # Stop progress tracking
+        progress_tracker.stop_display()
+        
         # IDENTICAL cleanup to interactive mode
         workspace_manager.restore_original_directory()
     

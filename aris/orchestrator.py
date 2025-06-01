@@ -9,6 +9,7 @@ from .mcp_service import MCPService
 from .prompt_formatter import PromptFormatter
 from .cli_flag_manager import CLIFlagManager
 from .claude_cli_executor import ClaudeCLIExecutor
+from .progress_tracker import ProgressTracker, ExecutionPhase, parse_chunk_for_progress_detail
 
 # Default configuration
 CLAUDE_CLI_PATH = os.getenv("CLAUDE_CLI_PATH", "claude")
@@ -142,7 +143,8 @@ async def route(
     tool_preferences: Optional[List[str]] = None,
     system_prompt: Optional[str] = None,
     reference_file_path: Optional[str] = None,
-    is_first_message: bool = False
+    is_first_message: bool = False,
+    progress_tracker: Optional[ProgressTracker] = None
 ) -> AsyncIterator[str]:
     """
     Routes user messages to Claude CLI with appropriate system prompt and tool configuration.
@@ -165,6 +167,10 @@ async def route(
         return
     
     log_router_activity(f"Orchestrator: Routing message - '{user_msg_for_turn[:100]}...', session: {claude_session_to_resume}")
+    
+    # Update progress tracking
+    if progress_tracker:
+        progress_tracker.update_phase(ExecutionPhase.PROCESSING_INPUT, "Preparing request")
     
     # If this is the first message and there's a reference file, modify the message to instruct Claude to read it
     modified_user_msg = user_msg_for_turn
@@ -344,11 +350,30 @@ async def route(
     
     # Execute Claude CLI with the formatted prompt and flags
     log_router_activity(f"Orchestrator: Handing off to ClaudeCLIExecutor.")
+    
+    # Update progress tracking
+    if progress_tracker:
+        progress_tracker.update_phase(ExecutionPhase.GENERATING_RESPONSE, "Starting Claude CLI")
+    
     async for chunk in claude_cli_executor_instance.execute_cli(
         prompt_string=prompt_string,
         shared_flags=cli_flags,
         session_to_resume=claude_session_to_resume
     ):
+        # Update progress with real-time details from the chunk
+        if progress_tracker:
+            try:
+                detail = parse_chunk_for_progress_detail(chunk)
+                if detail:
+                    progress_tracker.update_detail(detail)
+            except Exception as e:
+                # Don't let progress tracking errors break the main flow
+                log_debug(f"Error updating progress tracker: {e}")
+        
         yield chunk
+    
+    # Mark progress as complete
+    if progress_tracker:
+        progress_tracker.update_phase(ExecutionPhase.COMPLETING, "Finalizing response")
     
     log_router_activity(f"Orchestrator: Finished processing request for message: '{user_msg_for_turn[:100]}...'")

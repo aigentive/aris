@@ -11,8 +11,14 @@
       "Bash(rg:*)",
       "Bash(poetry add:*)",
       "Bash(awk:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(python -m pytest tests/ -v)",
+      "Bash(python -m pytest tests/ -v --ignore=tests/aris/test_logging_utils.py)",
+      "Bash(python -m pytest tests/aris/test_cli_args.py tests/aris/test_cli_init_and_args.py -v)",
+      "Bash(python -m pytest tests/aris/test_orchestrator.py tests/aris/test_cli_flag_manager.py tests/aris/test_profile_manager.py -v)",
+      "Bash(diff:*)"
     ],
     "deny": []
-  }
+  },
+  "enableAllProjectMcpServers": false
 }

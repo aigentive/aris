@@ -24,6 +24,7 @@ from .session_state import SessionState, get_current_session_state, set_current_
 from .tts_handler import tts_speak, summarize_for_voice
 from .profile_handler import process_special_commands
 from .interrupt_handler import get_interrupt_handler, InterruptContext
+from .progress_tracker import create_progress_tracker, ExecutionPhase
 
 # Constants for spinner animation
 SPINNER_CHARS = ['|', '/', '-', '\\']
@@ -121,7 +122,18 @@ async def handle_route_chunks(
     interrupt_handler = get_interrupt_handler()
     interrupt_handler.set_context(InterruptContext.CLAUDE_THINKING)
     
+    # Check if verbose mode is enabled
+    from .cli_args import PARSED_ARGS
+    verbose_mode = PARSED_ARGS and PARSED_ARGS.verbose
+    
+    # Keep the original spinner for visual appeal
     stop_spinner_event, spinner = start_spinner(thinking_prefix)
+    
+    # Add progress tracker for detailed status (only show if not verbose to avoid interference)
+    progress_tracker = create_progress_tracker(interactive=True, verbose=verbose_mode)
+    if not verbose_mode:  # Only show progress tracker if verbose is off
+        progress_tracker.start_display()
+    
     assistant_text_parts = []
     assistant_spoke = False
 
@@ -160,7 +172,8 @@ async def handle_route_chunks(
                 tool_preferences=tool_preferences,
                 system_prompt=system_prompt,
                 reference_file_path=reference_file_path,
-                is_first_message=is_first_message
+                is_first_message=is_first_message,
+                progress_tracker=progress_tracker
             ):
                 try:
                     event_data = json.loads(chunk_str)
@@ -287,6 +300,10 @@ async def handle_route_chunks(
         else:
             return session_state.session_id if session_state else None, concatenated_text, assistant_spoke
     except Exception as route_err:  # Catch other errors from route() or chunk processing
+        # Stop progress tracker first in case of error
+        if not verbose_mode:
+            progress_tracker.stop_display()
+            
         if not stop_spinner_event.is_set(): 
             await stop_spinner(stop_spinner_event, spinner)
         error_message = f"Error during Claude processing: {route_err}"
@@ -295,6 +312,11 @@ async def handle_route_chunks(
         ]), style=cli_style, file=sys.stderr)
         log_error(f"Error from route() for '{user_msg}': {route_err}", exception_info=str(route_err))
     finally:
+        # Stop progress tracker first
+        if not verbose_mode:
+            progress_tracker.stop_display()
+        
+        # Then stop spinner
         if 'stop_spinner_event' in locals() and stop_spinner_event and not stop_spinner_event.is_set():
             await stop_spinner(stop_spinner_event, spinner)
         
