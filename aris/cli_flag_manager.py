@@ -14,7 +14,8 @@ class CLIFlagManager:
     
     USER_DESIRED_NON_MCP_TOOLS: List[str] = [
         "Task", "Glob", "Grep", "LS", "Read", "Edit", "MultiEdit", "Write",
-        "NotebookRead", "NotebookEdit", "WebFetch", "Batch", "TodoRead", "TodoWrite", "WebSearch"
+        "NotebookRead", "NotebookEdit", "WebFetch", "Batch", "TodoRead", "TodoWrite", "WebSearch",
+        "Bash"  # All Bash commands - native Claude Code tools that should never get MCP prefixes
     ]
     
     # Dynamic server prefix format instead of hardcoded prefix
@@ -125,6 +126,12 @@ class CLIFlagManager:
         
         # Add non-MCP tools
         for tool_name in self.USER_DESIRED_NON_MCP_TOOLS:
+            # Special handling for "Bash" - it represents all Bash commands
+            if tool_name == "Bash":
+                # Don't add "Bash" itself, as Bash commands are added via tool preferences
+                # This entry just ensures Bash commands are recognized as non-MCP tools
+                continue
+                
             # Extract server names from tools we already have to avoid hardcoding
             available_servers = set()
             for existing_tool in final_tools_for_claude_cli:
@@ -170,6 +177,12 @@ class CLIFlagManager:
                 if pref in final_tools_for_claude_cli:
                     filtered_tools.add(pref)
                     log_debug(f"CLIFlagManager: Added exact match tool: {pref}")
+                    continue
+                
+                # Special handling for Bash commands - they should be added as-is (native Claude Code tools)
+                if pref.startswith("Bash("):
+                    filtered_tools.add(pref)
+                    log_debug(f"CLIFlagManager: Added Bash command as native tool: {pref}")
                     continue
                 
                 # If the preference is already a full MCP tool name, add it directly

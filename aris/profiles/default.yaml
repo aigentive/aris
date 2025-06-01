@@ -44,6 +44,24 @@ tools:
   # Advanced Tools
   - Task
 
+  # Safe Bash Commands (Common file operations and system commands)
+  - "Bash(ls:*)"           # List directory contents
+  - "Bash(cp:*)"           # Copy files and directories
+  - "Bash(mv:*)"           # Move/rename files and directories
+  - "Bash(mkdir:*)"        # Create directories
+  - "Bash(rmdir:*)"        # Remove empty directories
+  - "Bash(cat:*)"          # Display file contents
+  - "Bash(head:*)"         # Show first lines of files
+  - "Bash(tail:*)"         # Show last lines of files
+  - "Bash(wc:*)"           # Count lines, words, characters
+  - "Bash(grep:*)"         # Search text patterns
+  - "Bash(find:*)"         # Find files and directories
+  - "Bash(pwd:*)"          # Print working directory
+  - "Bash(date:*)"         # Display current date/time
+  - "Bash(whoami:*)"       # Display current user
+  - "Bash(echo:*)"         # Display text
+  - "Bash(touch:*)"        # Create empty files or update timestamps
+
 # MCP configuration
 # Uncomment and modify the following line to add MCP server configurations
 # mcp_config_files:

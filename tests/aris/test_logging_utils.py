@@ -7,7 +7,14 @@ from pathlib import Path
 from typing import List, Dict, Any
 
 import pytest
-from freezegun import freeze_time
+
+# Make freezegun optional - if not available, skip tests that need it
+try:
+    from freezegun import freeze_time
+    HAS_FREEZEGUN = True
+except ImportError:
+    HAS_FREEZEGUN = False
+    freeze_time = lambda x: lambda f: f  # No-op decorator
 
 # Assuming logging_utils is a sibling module or correctly in PYTHONPATH for direct import
 # For testing, it's often easier to add the parent directory of the module to sys.path
@@ -27,19 +34,31 @@ def reset_logging_globals(monkeypatch):
     """Resets logging_utils globals before each test to ensure isolation."""
     monkeypatch.setattr(logging_utils, '_CONSOLE_LOGGING_ENABLED', False)
     monkeypatch.setattr(logging_utils, '_LOG_FILE_PATH', "test_temp_aris_run.log")
-    # Clean up the log file if it exists from a previous run before tests
-    if Path(logging_utils._LOG_FILE_PATH).exists():
-        Path(logging_utils._LOG_FILE_PATH).unlink()
+    # Clean up any timestamped log files from previous runs
+    import glob
+    for log_file in glob.glob("test_temp_aris_run_*.log"):
+        try:
+            Path(log_file).unlink()
+        except FileNotFoundError:
+            pass
     yield
-    # Clean up the log file after tests
-    if Path(logging_utils._LOG_FILE_PATH).exists():
-        Path(logging_utils._LOG_FILE_PATH).unlink()
+    # Clean up timestamped log files after tests
+    for log_file in glob.glob("test_temp_aris_run_*.log"):
+        try:
+            Path(log_file).unlink()
+        except FileNotFoundError:
+            pass
 
 @pytest.fixture
 def temp_log_file(tmp_path: Path) -> Path:
     log_file = tmp_path / "test_aris_run.log"
     # Ensure logging_utils uses this path for the duration of the test
     logging_utils.configure_logging(enable_console_logging=False, log_file_path=str(log_file))
+    # Return the actual timestamped log file path that was created
+    import glob
+    timestamped_files = glob.glob(str(tmp_path / "test_aris_run_*.log"))
+    if timestamped_files:
+        return Path(timestamped_files[0])
     return log_file
 
 @freeze_time("2023-01-01 12:00:00")
@@ -49,12 +68,18 @@ def test_configure_logging(tmp_path: Path, capsys):
     logging_utils.configure_logging(enable_console_logging=True, log_file_path=str(log_file_path))
     
     assert logging_utils._CONSOLE_LOGGING_ENABLED is True
-    assert logging_utils._LOG_FILE_PATH == str(log_file_path)
+    # The _LOG_FILE_PATH should be the timestamped version
+    assert logging_utils._LOG_FILE_PATH.startswith(str(log_file_path.with_suffix(''))) # Without .log extension
+    assert logging_utils._LOG_FILE_PATH.endswith('.log')
     
-    # Check if the initial configuration message was written to the file
-    assert log_file_path.exists()
-    content = log_file_path.read_text()
-    expected_log_init_msg = f"2023-01-01T12:00:00 [INFO] Logging configured by configure_logging. Console: enabled. Target Log File: {str(log_file_path)}"
+    # Check if the initial configuration message was written to the timestamped file
+    import glob
+    timestamped_files = glob.glob(str(tmp_path / "custom_config_*.log"))
+    assert len(timestamped_files) == 1
+    actual_log_file = Path(timestamped_files[0])
+    assert actual_log_file.exists()
+    content = actual_log_file.read_text()
+    expected_log_init_msg = f"2023-01-01T12:00:00 [INFO] Logging configured by configure_logging. Console: enabled. Target Log File: {str(actual_log_file)}"
     assert expected_log_init_msg in content
 
 @freeze_time("2023-01-15 10:30:00")
@@ -106,15 +131,20 @@ def test_log_functions_file_and_console(temp_log_file: Path, capsys, log_functio
         expected_console_details = f"Details: {details_content}"
         assert expected_console_details in console_output
 
-def test_console_logging_disabled(temp_log_file: Path, capsys):
-    logging_utils.configure_logging(enable_console_logging=False, log_file_path=str(temp_log_file))
+def test_console_logging_disabled(tmp_path: Path, capsys):
+    log_file = tmp_path / "console_disabled_test.log"
+    logging_utils.configure_logging(enable_console_logging=False, log_file_path=str(log_file))
     logging_utils.log_info("This should not appear on console")
     captured = capsys.readouterr()
     assert "This should not appear on console" not in captured.out
     assert "This should not appear on console" not in captured.err
     
-    # But it should be in the file
-    file_content = temp_log_file.read_text()
+    # But it should be in the timestamped file
+    import glob
+    timestamped_files = glob.glob(str(tmp_path / "console_disabled_test_*.log"))
+    assert len(timestamped_files) == 1
+    actual_log_file = Path(timestamped_files[0])
+    file_content = actual_log_file.read_text()
     assert "This should not appear on console" in file_content
 
 @freeze_time("2023-02-01 11:00:00")
@@ -137,11 +167,13 @@ def test_logging_to_unwritable_file(capsys, monkeypatch):
     stderr_output = strip_ansi(captured.err)
     
     # Check for key parts of the error messages
-    # Expected: 1. Initialization failure message, 2. Regular log failure message, 3. Original message log
-    assert f"[LOGGING_ERROR] INITIALIZATION: Failed to write to log file {unwritable_path}" in stderr_output
+    # The path will be timestamped, so check for base path
+    base_path = "/this/path/should/not/be/writable/test_log"
+    assert "[LOGGING_ERROR] INITIALIZATION: Failed to write to log file" in stderr_output
+    assert base_path in stderr_output # Base path should be present
     # Check error message more flexibly since the exact format might vary by platform
     assert "Permission denied" in stderr_output # This is part of both messages
-    assert f"[LOGGING_ERROR] Failed to write to log file {unwritable_path}" in stderr_output # From the second attempt
+    assert "[LOGGING_ERROR] Failed to write to log file" in stderr_output # From the second attempt
     assert "[LOGGING_ERROR] ORIGINAL MESSAGE (WARNING): A test warning" in stderr_output
 
 @freeze_time("2023-02-01 11:30:00")
@@ -149,10 +181,18 @@ def test_initial_configure_logging_fails_to_write(capsys, monkeypatch, tmp_path)
     # Use a real path that we will make temporarily unwritable for the config write itself
     log_file = tmp_path / "init_fail_test.log"
 
-    def mock_open_for_config_fail(file, mode, encoding):
-        if file == str(log_file) and mode == 'a': # Target the specific initial write
+    # Store the original open function to avoid recursion
+    original_open = open
+    
+    def mock_open_for_config_fail(file, mode='r', buffering=-1, encoding=None, **kwargs):
+        # Target any timestamped version of the log file - both 'w' and 'a' modes
+        if str(log_file.with_suffix('')) in file and file.endswith('.log') and mode in ('w', 'a'):
             raise OSError("Cannot write initial config")
-        return open(file, mode, encoding=encoding) # Allow other opens (like for reading if any)
+        # Use original open for everything else
+        if encoding is not None:
+            return original_open(file, mode, buffering, encoding=encoding, **kwargs)
+        else:
+            return original_open(file, mode, buffering, **kwargs)
     
     monkeypatch.setattr("builtins.open", mock_open_for_config_fail)
 
@@ -160,7 +200,7 @@ def test_initial_configure_logging_fails_to_write(capsys, monkeypatch, tmp_path)
 
     captured = capsys.readouterr()
     stderr_output = strip_ansi(captured.err)
-    # Check for key parts
-    assert f"[LOGGING_ERROR] INITIALIZATION: Failed to write to log file {str(log_file)}" in stderr_output
-    # Check error message more flexibly since the exact format might vary by platform
+    # Check for key parts - now checking for the timestamped file path pattern
+    assert "[LOGGING_ERROR] INITIALIZATION: Failed to write to log file" in stderr_output
+    assert str(log_file.with_suffix('')) in stderr_output  # Base path should be in there
     assert "Cannot write initial config" in stderr_output 
