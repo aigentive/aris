@@ -268,7 +268,7 @@ class TestInsightsEndToEndWorkflow:
         assert not tracker.has_insights()
         assert tracker.insights_collector is None
         
-        # Standard chunk processing should still work
+        # Tool chunk processing should work with hierarchical display
         chunk = json.dumps({
             "type": "assistant",
             "message": {
@@ -282,8 +282,22 @@ class TestInsightsEndToEndWorkflow:
         
         detail = tracker.process_chunk_with_insights(chunk)
         
-        # Should fall back to standard processing
-        assert detail == "Using test_tool"
+        # Should return None to prevent duplicate display
+        assert detail is None
+        
+        # Non-tool chunks should still return standard progress
+        text_chunk = json.dumps({
+            "type": "assistant", 
+            "message": {
+                "content": [{
+                    "type": "text",
+                    "text": "Processing request"
+                }]
+            }
+        })
+        
+        detail = tracker.process_chunk_with_insights(text_chunk)
+        assert detail == "Writing: Processing request"
         assert len(tracker._pending_insights) == 0
         
         # Completion summary should return None

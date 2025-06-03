@@ -45,13 +45,12 @@ class TestWorkflowMCPServer:
         """Test the execute_workflow_phase handler with mocked subprocess."""
         server = WorkflowMCPServer(port=8094)
         
-        # Mock subprocess.run to simulate successful execution
-        mock_result = Mock()
-        mock_result.returncode = 0
-        mock_result.stdout = "Test execution successful"
-        mock_result.stderr = ""
+        # Mock asyncio.create_subprocess_exec and process communication
+        mock_proc = AsyncMock()
+        mock_proc.communicate.return_value = (b"Test execution successful", b"")
+        mock_proc.returncode = 0
         
-        with patch('aris.workflow_mcp_server.subprocess.run', return_value=mock_result):
+        with patch('aris.workflow_mcp_server.asyncio.create_subprocess_exec', return_value=mock_proc):
             result = await server._handle_execute_workflow_phase(
                 profile="test_profile",
                 workspace="test_workspace",
@@ -76,13 +75,12 @@ class TestWorkflowMCPServer:
         """Test execute_workflow_phase handler with failed execution."""
         server = WorkflowMCPServer(port=8094)
         
-        # Mock subprocess.run to simulate failed execution
-        mock_result = Mock()
-        mock_result.returncode = 1
-        mock_result.stdout = ""
-        mock_result.stderr = "Profile not found"
+        # Mock asyncio.create_subprocess_exec and process communication for failed execution
+        mock_proc = AsyncMock()
+        mock_proc.communicate.return_value = (b"", b"Profile not found")
+        mock_proc.returncode = 1
         
-        with patch('aris.workflow_mcp_server.subprocess.run', return_value=mock_result):
+        with patch('aris.workflow_mcp_server.asyncio.create_subprocess_exec', return_value=mock_proc):
             result = await server._handle_execute_workflow_phase(
                 profile="nonexistent_profile",
                 workspace="test_workspace", 
@@ -101,10 +99,14 @@ class TestWorkflowMCPServer:
         """Test execute_workflow_phase handler with timeout."""
         server = WorkflowMCPServer(port=8094)
         
-        # Mock subprocess.run to simulate timeout
-        from subprocess import TimeoutExpired
+        # Mock asyncio.create_subprocess_exec and asyncio.wait_for to simulate timeout
+        mock_proc = AsyncMock()
+        mock_proc.terminate = AsyncMock()
+        mock_proc.kill = AsyncMock()
+        mock_proc.wait = AsyncMock()
         
-        with patch('aris.workflow_mcp_server.subprocess.run', side_effect=TimeoutExpired("cmd", 1)):
+        with patch('aris.workflow_mcp_server.asyncio.create_subprocess_exec', return_value=mock_proc), \
+             patch('aris.workflow_mcp_server.asyncio.wait_for', side_effect=asyncio.TimeoutError):
             result = await server._handle_execute_workflow_phase(
                 profile="test_profile",
                 workspace="test_workspace",

@@ -73,20 +73,32 @@ class TestProgressTrackerWithInsights:
                 assert len(insight_prints) >= 1
     
     def test_process_chunk_with_insights_disabled(self):
-        """Test chunk processing with insights disabled."""
+        """Test chunk processing with insights disabled - hierarchical display still works."""
         tracker = ProgressTracker(interactive=False, show_progress=False, enable_insights=False)
         
         chunk = '{"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "test_tool"}]}}'
         
+        result = tracker.process_chunk_with_insights(chunk)
+        
+        # Should use enhanced hierarchical processing and return None to prevent duplicates
+        assert result is None
+        assert len(tracker._pending_insights) == 0
+        
+        # Test non-tool chunks still work normally
+        text_chunk = '{"type": "assistant", "message": {"content": [{"type": "text", "text": "Hello"}]}}'
+        result = tracker.process_chunk_with_insights(text_chunk)
+        assert result == "Writing: Hello"
+        
+        # Test that fallback still works for malformed JSON
         with patch('aris.progress_tracker.parse_chunk_for_progress_detail') as mock_parse:
-            mock_parse.return_value = "Using test_tool"
+            mock_parse.return_value = "fallback result"
             
-            result = tracker.process_chunk_with_insights(chunk)
+            malformed_chunk = 'malformed json'
+            result = tracker.process_chunk_with_insights(malformed_chunk)
             
-            # Should fall back to standard parsing
-            mock_parse.assert_called_once_with(chunk)
-            assert result == "Using test_tool"
-            assert len(tracker._pending_insights) == 0
+            # Should fall back to standard parsing for malformed JSON
+            mock_parse.assert_called_once_with(malformed_chunk)
+            assert result == "fallback result"
     
     def test_process_chunk_insights_error_handling(self, mock_insights_collector):
         """Test error handling in insights processing."""

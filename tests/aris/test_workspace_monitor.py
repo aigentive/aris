@@ -70,6 +70,36 @@ class TestWorkspaceFileMonitor:
         git_dir.mkdir(exist_ok=True)
         assert monitor._should_ignore(git_dir) is True
     
+    def test_should_ignore_aris_files(self, monitor, temp_workspace):
+        """Test that ARIS-specific files are properly ignored."""
+        # Test ARIS log directory
+        logs_dir = temp_workspace / "logs"
+        assert monitor._should_ignore(logs_dir) is True
+        
+        # Test ARIS log files in logs directory
+        logs_dir.mkdir(exist_ok=True)
+        log_file = logs_dir / "aris_run_20240601_123456.log"
+        assert monitor._should_ignore(log_file) is True
+        
+        # Test ARIS log files with pattern
+        aris_log = temp_workspace / "aris_session.log"
+        assert monitor._should_ignore(aris_log) is True
+        
+        # Test .aris profile directory
+        aris_profile_dir = temp_workspace / ".aris"
+        assert monitor._should_ignore(aris_profile_dir) is True
+        
+        # Test CLAUDE backup files
+        claude_backup = temp_workspace / "CLAUDE.md.bak"
+        assert monitor._should_ignore(claude_backup) is True
+        
+        # Test that normal files are still not ignored
+        normal_file = temp_workspace / "content.md"
+        assert monitor._should_ignore(normal_file) is False
+        
+        normal_log = temp_workspace / "application.log"
+        assert monitor._should_ignore(normal_log) is False
+    
     def test_take_workspace_snapshot_empty(self, monitor):
         """Test taking a snapshot of an empty workspace."""
         snapshot = monitor._take_workspace_snapshot()

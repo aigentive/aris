@@ -70,6 +70,10 @@ async def test_initialize_router_components_success(monkeypatch):
     monkeypatch.setattr(orchestrator, "TOOLS_SCHEMA", [])
 
     await orchestrator.initialize_router_components()
+    
+    # Wait a bit for the background refresh task to complete
+    import asyncio
+    await asyncio.sleep(0.1)
 
     assert orchestrator.mcp_service_instance == mock_mcp
     mock_mcp.is_sdk_available.assert_called_once()
@@ -99,6 +103,10 @@ async def test_initialize_router_components_mcp_sdk_not_available(monkeypatch):
     monkeypatch.setattr("os.path.abspath", lambda x: "/fake/script/dir/orchestrator.py")
 
     await orchestrator.initialize_router_components()
+    
+    # Wait a bit for the background refresh task to complete
+    import asyncio
+    await asyncio.sleep(0.1)
 
     mock_mcp.fetch_tools_schema.assert_not_called() # Should not be called
     assert orchestrator.TOOLS_SCHEMA == []
@@ -115,6 +123,10 @@ async def test_initialize_router_components_mcp_fetch_exception(monkeypatch):
     monkeypatch.setattr("os.path.abspath", lambda x: "/fake/script/dir/orchestrator.py")
 
     await orchestrator.initialize_router_components()
+    
+    # Wait a bit for the background refresh task to complete and fail
+    import asyncio
+    await asyncio.sleep(0.1)
 
     assert orchestrator.TOOLS_SCHEMA == []
     orchestrator.log_error.assert_called_with(

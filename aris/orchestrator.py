@@ -23,6 +23,21 @@ prompt_formatter_instance: Optional[PromptFormatter] = None
 cli_flag_manager_instance: Optional[CLIFlagManager] = None
 claude_cli_executor_instance: Optional[ClaudeCLIExecutor] = None
 
+async def initialize_router_components_minimal():
+    """Initialize core router components without MCP (for faster CLI startup)."""
+    global mcp_service_instance, prompt_formatter_instance, cli_flag_manager_instance, claude_cli_executor_instance
+    
+    log_router_activity("Initializing core router components (services and globals)...")
+    
+    # Initialize core services without MCP connection
+    router_script_dir = os.path.dirname(os.path.abspath(__file__))
+    mcp_service_instance = MCPService()  # No config file = no MCP servers
+    prompt_formatter_instance = PromptFormatter()
+    cli_flag_manager_instance = CLIFlagManager(script_dir_path=router_script_dir)
+    claude_cli_executor_instance = ClaudeCLIExecutor(claude_cli_path=CLAUDE_CLI_PATH)
+    
+    log_router_activity("Core components initialized - MCP tools will be loaded when profile requires them")
+
 async def initialize_router_components(mcp_config_file: Optional[str] = None):
     """
     Initialize all router components needed for ARIS.
@@ -79,8 +94,26 @@ async def initialize_router_components(mcp_config_file: Optional[str] = None):
     cli_flag_manager_instance = CLIFlagManager(script_dir_path=router_script_dir)
     claude_cli_executor_instance = ClaudeCLIExecutor(claude_cli_path=CLAUDE_CLI_PATH)
     
-    # Refresh tools schema
-    await refresh_tools_schema()
+    # Start tools schema refresh in background - don't block initialization
+    log_router_activity("Starting tools schema refresh in background")
+    refresh_task = asyncio.create_task(refresh_tools_schema())
+    
+    # Add a callback to handle completion without blocking
+    def handle_initial_refresh_result(task):
+        try:
+            task.result()  # Get result to prevent unhandled exception warnings
+            log_router_activity("Background tools schema refresh completed successfully")
+        except asyncio.TimeoutError:
+            log_warning("Background tools schema refresh timed out")
+        except asyncio.CancelledError:
+            log_warning("Background tools schema refresh was cancelled")
+        except Exception as e:
+            log_warning(f"Background tools schema refresh failed: {e}")
+            # Make sure we continue even if MCP fails
+            global TOOLS_SCHEMA
+            TOOLS_SCHEMA = []
+    
+    refresh_task.add_done_callback(handle_initial_refresh_result)
 
 async def refresh_tools_schema():
     """Refresh the tools schema from MCP servers."""
@@ -97,8 +130,9 @@ async def refresh_tools_schema():
     # Fetch MCP Tools Schema using MCPService
     if mcp_service_instance.is_sdk_available():
         try:
-            # Set a timeout for the entire refresh operation
-            async with asyncio.timeout(15.0):  # 15 second timeout
+            # Set a timeout for the entire refresh operation - increased for slow MCP servers
+            async with asyncio.timeout(60.0):  # 60 second timeout for MCP server startup
+                log_router_activity("MCPService: Fetching tools from configured servers")
                 fetched_schema = await mcp_service_instance.fetch_tools_schema()
                 TOOLS_SCHEMA = fetched_schema if fetched_schema is not None else []
                 log_debug(f"Refreshed tools schema with {len(TOOLS_SCHEMA)} tools")
@@ -114,11 +148,14 @@ async def refresh_tools_schema():
                             server_tools[server_name].append(tool["name"])
                     
                     log_router_activity(f"Available tools after refresh by server: {server_tools}")
+                else:
+                    log_router_activity("No tools available after refresh")
         except asyncio.TimeoutError:
-            log_warning("Timeout while refreshing tools schema, TOOLS_SCHEMA will remain empty")
-            # Don't update TOOLS_SCHEMA in case of timeout - keep it empty
+            log_warning("Timeout while refreshing tools schema after 60s, continuing with empty schema")
+            TOOLS_SCHEMA = []  # Ensure we have an empty list
         except asyncio.CancelledError:
             log_warning("Tools schema refresh was cancelled")
+            TOOLS_SCHEMA = []  # Ensure we have an empty list
             # Re-raise to propagate the cancellation
             raise
         except Exception as e:
@@ -171,6 +208,10 @@ async def route(
     # Update progress tracking
     if progress_tracker:
         progress_tracker.update_phase(ExecutionPhase.PROCESSING_INPUT, "Preparing request")
+    
+    # Check if tools schema is available (non-blocking)
+    if not TOOLS_SCHEMA:
+        log_debug("Tools schema not yet available, will use empty schema for this request")
     
     # If this is the first message and there's a reference file, modify the message to instruct Claude to read it
     modified_user_msg = user_msg_for_turn
@@ -258,35 +299,40 @@ async def route(
                         except Exception as e:
                             log_warning(f"Error reading MCP config file: {e}")
                         
-                        # Reload MCP service with the new config
+                        # Reload MCP service with the new config in background
                         try:
                             if mcp_service_instance:
-                                log_router_activity(f"Reloading MCP service with new config: {mcp_config_abs_path}")
-                                success = mcp_service_instance.reload_config(mcp_config_abs_path)
-                                log_router_activity(f"MCP config reload result: {success}")
+                                log_router_activity(f"Starting MCP service reload in background: {mcp_config_abs_path}")
                                 
-                                # Create a task for refreshing the tools schema and add done callback
-                                # to prevent warnings about unhandled exceptions
-                                log_router_activity("Refreshing tools schema after MCP config reload")
-                                refresh_task = asyncio.create_task(refresh_tools_schema())
-                                
-                                # Add a callback to handle any exceptions in the task
-                                def handle_refresh_task_result(task):
+                                # Create a background task for the entire MCP reload + tools refresh
+                                async def reload_mcp_and_refresh_tools():
                                     try:
-                                        # Get the result to prevent unhandled exception warnings
-                                        task.result()
-                                        log_router_activity("Tools schema refresh completed successfully")
+                                        log_router_activity(f"Reloading MCP service with new config: {mcp_config_abs_path}")
+                                        success = mcp_service_instance.reload_config(mcp_config_abs_path)
+                                        log_router_activity(f"MCP config reload result: {success}")
+                                        
+                                        if success:
+                                            log_router_activity("Refreshing tools schema after MCP config reload")
+                                            await refresh_tools_schema()
+                                            log_router_activity("Tools schema refresh completed successfully")
                                     except asyncio.TimeoutError:
-                                        log_warning("Timeout in tools schema refresh task")
-                                    except asyncio.CancelledError:
-                                        log_warning("Tools schema refresh task was cancelled")
+                                        log_warning("Timeout in MCP reload and tools schema refresh")
                                     except Exception as e:
-                                        log_warning(f"Error in refresh_tools_schema task: {e}")
-                                        # Log detailed traceback for debugging
+                                        log_warning(f"Error in MCP reload and tools refresh: {e}")
                                         import traceback
                                         log_error(f"Traceback: {traceback.format_exc()}")
                                 
-                                refresh_task.add_done_callback(handle_refresh_task_result)
+                                # Start the background task without blocking
+                                reload_task = asyncio.create_task(reload_mcp_and_refresh_tools())
+                                
+                                # Add callback to handle completion without blocking
+                                def handle_reload_completion(task):
+                                    try:
+                                        task.result()  # Get result to prevent unhandled exception warnings
+                                    except Exception as e:
+                                        log_warning(f"MCP reload background task failed: {e}")
+                                
+                                reload_task.add_done_callback(handle_reload_completion)
                             else:
                                 log_warning("MCP service instance is None, cannot reload config")
                         except Exception as e:
@@ -340,6 +386,19 @@ async def route(
         log_router_activity(f"No MCP config path provided, will continue without it")
         mcp_config_path = None
             
+    # Log warning for failed MCP servers but continue execution
+    failed_servers = set()
+    if mcp_service_instance and hasattr(mcp_service_instance, 'failed_servers'):
+        failed_servers = mcp_service_instance.failed_servers
+        if failed_servers and len(failed_servers) > 0:
+            # Get profile name for better warning message
+            profile_name = "unknown"
+            if session_state and hasattr(session_state, 'active_profile') and session_state.active_profile:
+                profile_name = session_state.active_profile.get('profile_name', 'unknown')
+            
+            log_warning(f"Some MCP servers failed to connect for profile '{profile_name}': {failed_servers}")
+            log_warning("Continuing execution - MCP tools from failed servers will not be available")
+    
     cli_flags = cli_flag_manager_instance.generate_claude_cli_flags(
         mcp_tools_schema=TOOLS_SCHEMA,
         system_prompt=system_prompt,
@@ -353,7 +412,11 @@ async def route(
     
     # Update progress tracking
     if progress_tracker:
-        progress_tracker.update_phase(ExecutionPhase.GENERATING_RESPONSE, "Starting Claude CLI")
+        if mcp_config_data and 'mcpServers' in mcp_config_data:
+            server_count = len(mcp_config_data['mcpServers'])
+            progress_tracker.update_phase(ExecutionPhase.GENERATING_RESPONSE, f"Starting Claude CLI with {server_count} MCP server(s)")
+        else:
+            progress_tracker.update_phase(ExecutionPhase.GENERATING_RESPONSE, "Starting Claude CLI")
     
     async for chunk in claude_cli_executor_instance.execute_cli(
         prompt_string=prompt_string,

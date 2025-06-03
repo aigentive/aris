@@ -50,12 +50,35 @@ class SessionInsightsCollector:
         self._last_insight_time = time.time()
         self._last_workspace_check = time.time()
         
+        # Lazy initialization to avoid blocking during startup
+        self._workspace_monitor = None
+        self._workspace_path = None
+        
         # Get workspace from session state (always available in ARIS)
         from .session_state import get_current_session_state
         session_state = get_current_session_state()
-        workspace_path = session_state.workspace_path if session_state else os.getcwd()
+        self._workspace_path = session_state.workspace_path if session_state else os.getcwd()
+    
+    @property
+    def workspace_monitor(self) -> Optional[WorkspaceFileMonitor]:
+        """Lazy initialization of workspace monitor to avoid blocking startup"""
+        if self._workspace_monitor is None and self._workspace_path:
+            try:
+                log_debug(f"Lazy initializing workspace monitor for: {self._workspace_path}")
+                self._workspace_monitor = WorkspaceFileMonitor(self._workspace_path)
+                log_debug(f"Workspace monitor initialized with {len(self._workspace_monitor._initial_snapshot)} files")
+            except Exception as e:
+                log_debug(f"Failed to initialize workspace monitor: {e}")
+                # Set to False to prevent repeated attempts
+                self._workspace_monitor = False
         
-        self.workspace_monitor = WorkspaceFileMonitor(workspace_path)
+        # Return None if initialization failed
+        return self._workspace_monitor if self._workspace_monitor is not False else None
+    
+    @workspace_monitor.setter
+    def workspace_monitor(self, value):
+        """Allow setting workspace monitor for testing purposes"""
+        self._workspace_monitor = value
         
     def process_chunk(self, chunk: str) -> Optional[Dict[str, Any]]:
         """Process JSON chunk and return insight if warranted"""

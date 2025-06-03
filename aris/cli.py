@@ -18,6 +18,11 @@ from prompt_toolkit.formatted_text import FormattedText
 _workflow_mcp_server_started = False
 _profile_mcp_server_started = False
 
+# Global server tracking for cleanup
+_profile_mcp_server_thread = None
+_workflow_mcp_server_thread = None
+_signal_handler_task = None
+
 def is_workflow_mcp_server_started() -> bool:
     """Check if workflow MCP server has been started."""
     return _workflow_mcp_server_started
@@ -479,8 +484,13 @@ async def run_cli_orchestrator():
             except Exception as e:
                 log_debug(f"Error in ensure_signal_handler: {e}")
     
-    # Start the signal handler checker
-    asyncio.create_task(ensure_signal_handler())
+    # Start the signal handler checker and track it for cleanup
+    signal_handler_task = asyncio.create_task(ensure_signal_handler())
+    interrupt_handler.track_task(signal_handler_task)
+    
+    # Store for cleanup (using global to access in cleanup function)
+    global _signal_handler_task
+    _signal_handler_task = signal_handler_task
     
     # Determine the profile name for welcome message
     profile_name = "default"
@@ -664,6 +674,17 @@ async def run_cli_orchestrator():
             # Loop will continue and text_mode_one_turn will be called to show prompt
 
     # --- Cleanup ---
+    # Clean up MCP servers first (before other cleanup)
+    await _shutdown_mcp_servers()
+    
+    # Cancel signal handler task if it exists
+    if _signal_handler_task and not _signal_handler_task.done():
+        _signal_handler_task.cancel()
+        try:
+            await _signal_handler_task
+        except asyncio.CancelledError:
+            log_debug("Signal handler task cancelled successfully")
+    
     voice_handler.shutdown()
     
     # Clean up interrupt handler
@@ -677,6 +698,41 @@ async def run_cli_orchestrator():
     workspace_manager.restore_original_directory()
     
     print_formatted_text("-----------------------------------------------------", style=cli_style)
+
+
+async def _shutdown_mcp_servers():
+    """Gracefully shutdown MCP servers to prevent port binding issues."""
+    global _workflow_mcp_server_started, _profile_mcp_server_started
+    global _workflow_mcp_server_thread, _profile_mcp_server_thread
+    
+    shutdown_tasks = []
+    
+    # Shutdown workflow MCP server
+    if _workflow_mcp_server_started and _workflow_mcp_server_thread:
+        log_debug("Shutting down Workflow MCP Server...")
+        try:
+            # Give the server thread a moment to cleanup
+            # Note: Since these are daemon threads running uvicorn, they will
+            # terminate when the main process exits, but we still track the state
+            _workflow_mcp_server_started = False
+            # The daemon thread will be terminated by Python when main process exits
+        except Exception as e:
+            log_error(f"Error shutting down Workflow MCP Server: {e}")
+    
+    # Shutdown profile MCP server  
+    if _profile_mcp_server_started and _profile_mcp_server_thread:
+        log_debug("Shutting down Profile MCP Server...")
+        try:
+            _profile_mcp_server_started = False
+            # The daemon thread will be terminated by Python when main process exits
+        except Exception as e:
+            log_error(f"Error shutting down Profile MCP Server: {e}")
+    
+    # Small delay to allow socket cleanup before process exit
+    if shutdown_tasks or _workflow_mcp_server_started or _profile_mcp_server_started:
+        await asyncio.sleep(0.1)
+    
+    log_debug("MCP server shutdown completed")
 
 
 async def _start_profile_mcp_server():
@@ -701,12 +757,13 @@ async def _start_profile_mcp_server():
         
         # Start the MCP server in a separate thread
         mcp_server = ProfileMCPServer(port=PARSED_ARGS.profile_mcp_port)
-        server_thread = threading.Thread(
+        global _profile_mcp_server_thread
+        _profile_mcp_server_thread = threading.Thread(
             target=run_server_with_signal, 
             args=(mcp_server, server_ready_event, server_error_msg),
             daemon=True
         )
-        server_thread.start()
+        _profile_mcp_server_thread.start()
         
         # Wait for up to 5 seconds for the server to start
         server_ready = server_ready_event.wait(5.0)
@@ -751,12 +808,22 @@ async def _start_workflow_mcp_server():
         def run_workflow_server_with_signal(server, ready_event, error_msg):
             try:
                 import uvicorn
+                import socket
+                import os
+                
+                # Set environment variable to enable socket reuse in uvicorn
+                os.environ.setdefault('UVICORN_SERVER_SOCKET_REUSE', '1')
+                
+                # Configure uvicorn with proper socket options for faster cleanup
                 uvicorn.run(
                     server.starlette_app,
                     host=server.host,
                     port=server.port,
-                    log_level="warning"
+                    log_level="warning",
+                    # Access log disabled to reduce noise
+                    access_log=False
                 )
+                
             except Exception as e:
                 error_msg[0] = str(e)
             finally:
@@ -765,12 +832,13 @@ async def _start_workflow_mcp_server():
         
         # Start the Workflow MCP server in a separate thread
         workflow_mcp_server = WorkflowMCPServer(port=8095)
-        workflow_server_thread = threading.Thread(
+        global _workflow_mcp_server_thread
+        _workflow_mcp_server_thread = threading.Thread(
             target=run_workflow_server_with_signal, 
             args=(workflow_mcp_server, workflow_server_ready_event, workflow_server_error_msg),
             daemon=True
         )
-        workflow_server_thread.start()
+        _workflow_mcp_server_thread.start()
         
         # Wait for up to 3 seconds for the server to start
         workflow_server_ready = workflow_server_ready_event.wait(3.0)

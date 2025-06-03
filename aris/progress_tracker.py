@@ -11,6 +11,7 @@ from typing import Optional, List, Dict, Any
 
 from .logging_utils import log_debug
 from .session_insights import SessionInsightsCollector
+from .progress_chunk_processor import ProgressChunkProcessor
 
 
 class ExecutionPhase(Enum):
@@ -56,6 +57,12 @@ class ProgressTracker:
         
         # Track phase history for debugging
         self.phase_history: List[ProgressState] = []
+        
+        # Add hierarchical display components
+        self.chunk_processor = ProgressChunkProcessor()
+        self._active_tools: Dict[str, float] = {}  # tool_id -> start_time
+        self._current_tool_batch: List[str] = []  # Track multiple tools in same message
+        self._pending_results: Dict[str, str] = {}  # tool_id -> result_message
         
         # Optional session insights (workspace monitoring always available since ARIS always has workspace)
         if enable_insights:
@@ -178,38 +185,87 @@ class ProgressTracker:
     
     def process_chunk_with_insights(self, chunk: str) -> Optional[str]:
         """
-        Process chunk for both standard progress details and optional insights.
-        Falls back to standard behavior if insights not enabled.
+        Enhanced chunk processing with hierarchical display and insights
         """
-        # Always get standard progress detail
-        progress_detail = parse_chunk_for_progress_detail(chunk)
-        
-        # Only collect insights if insights collector is available
+        # Always process insights first to ensure data collection
         if self.insights_collector:
             try:
-                # Collect insights
                 insight = self.insights_collector.process_chunk(chunk)
                 if insight:
                     self._pending_insights.append(insight)
-                    
-                    # Show immediate insights
                     if insight.get("show_immediately"):
                         self._display_insight(insight)
                 
-                # Check workspace changes periodically
+                # Check workspace changes and progress insights
                 workspace_insight = self.insights_collector.check_workspace_changes()
                 if workspace_insight:
                     self._display_insight(workspace_insight)
                 
-                # Check for periodic progress insights
                 progress_insight = self.insights_collector.get_current_progress_insight()
                 if progress_insight:
                     self._display_progress_insight(progress_insight)
             except Exception as e:
-                # Don't let insights errors break standard progress tracking
                 log_debug(f"Error in insights collection: {e}")
         
-        return progress_detail
+        try:
+            data = json.loads(chunk)
+            
+            # Handle tool execution start
+            if data.get("type") == "assistant":
+                content = data.get("message", {}).get("content", [])
+                
+                # Find all tool_use items in this message
+                tool_use_items = [item for item in content if item.get("type") == "tool_use"]
+                
+                if tool_use_items:
+                    # This is a new tool batch - reset tracking
+                    self._current_tool_batch = []
+                    
+                    # Track all tools in this batch and display each one
+                    for item in tool_use_items:
+                        tool_id = item.get("id", "")
+                        if tool_id:
+                            self._active_tools[tool_id] = time.time()
+                            self._current_tool_batch.append(tool_id)
+                            
+                            # Extract and display individual tool details
+                            tool_detail = self.chunk_processor.extract_single_tool_parameters(item)
+                            if tool_detail and self.show_progress:
+                                print(f"  ├─ {tool_detail}", flush=True)
+                    
+                    # Return None to suppress standard progress display
+                    return None
+            
+            # Handle tool completion  
+            elif data.get("type") == "user":
+                content = data.get("message", {}).get("content", [])
+                
+                for item in content:
+                    if item.get("type") == "tool_result":
+                        tool_id = item.get("tool_use_id", "")
+                        
+                        # Format the result without tree prefix
+                        result_detail = self._format_single_tool_result(item, tool_id)
+                        if result_detail:
+                            # Store the result for batch display
+                            self._pending_results[tool_id] = result_detail
+                            
+                            # Remove from current batch
+                            if tool_id in self._current_tool_batch:
+                                self._current_tool_batch.remove(tool_id)
+                            
+                            # If this completes the batch, display all results
+                            if not self._current_tool_batch and self._pending_results:
+                                self._display_tool_results_batch()
+                            
+                            # Return None to suppress standard progress display
+                            return None
+            
+            # For non-tool chunks, use standard progress detail
+            return parse_chunk_for_progress_detail(chunk)
+            
+        except (json.JSONDecodeError, KeyError):
+            return parse_chunk_for_progress_detail(chunk)
     
     def _display_insight(self, insight: Dict[str, Any]):
         """Display an actionable insight"""
@@ -235,6 +291,157 @@ class ProgressTracker:
         """Display periodic progress insight"""
         if self.show_progress:
             print(f"📊 {message}", flush=True)
+    
+    def _format_single_tool_result(self, item: dict, tool_id: str) -> Optional[str]:
+        """Format a single tool result without tree prefix"""
+        is_error = item.get("is_error", False)
+        result_content = item.get("content", "")
+        
+        # Calculate execution time if available
+        execution_time = ""
+        if tool_id in self._active_tools:
+            elapsed = time.time() - self._active_tools[tool_id]
+            if elapsed > 1.0:
+                execution_time = f" ({elapsed:.1f}s)"
+            del self._active_tools[tool_id]
+        
+        if is_error:
+            # Show brief error
+            error_preview = str(result_content)[:80]
+            if len(str(result_content)) > 80:
+                error_preview += "..."
+            # Clean up line breaks for single line display
+            error_preview = " ".join(error_preview.split())
+            return f"❌ Error: {error_preview}{execution_time}"
+        else:
+            # Show brief success summary with intelligent content extraction
+            if isinstance(result_content, str) and result_content.strip():
+                # Extract meaningful content (skip line numbers, get title/first content)
+                cleaned_content = self._extract_meaningful_preview(result_content)
+                return f"✅ {cleaned_content}{execution_time}"
+            else:
+                return f"✅ Completed{execution_time}"
+    
+    def _extract_meaningful_preview(self, content: str) -> str:
+        """Extract meaningful preview from file content, providing clean single-line summaries"""
+        if not content or not content.strip():
+            return "Empty file"
+        
+        lines = content.strip().split('\n')
+        cleaned_lines = []
+        
+        # Clean all lines and remove line numbers
+        for line in lines:
+            # Remove line number prefix if present (e.g., "     1\t")
+            cleaned_line = line
+            if '\t' in line:
+                parts = line.split('\t', 1)
+                if len(parts) > 1 and parts[0].strip().isdigit():
+                    cleaned_line = parts[1]
+            
+            cleaned_line = cleaned_line.strip()
+            if cleaned_line:
+                cleaned_lines.append(cleaned_line)
+        
+        if not cleaned_lines:
+            return "Content loaded"
+        
+        # Look for document titles, headers, or meaningful first content
+        for line in cleaned_lines:
+            # Markdown headers - extract title
+            if line.startswith('#'):
+                title = line.lstrip('#').strip()
+                if title and len(title) > 2:
+                    return self._format_preview(title, 100)
+            
+            # Python/shell comments with meaningful content (like script descriptions)
+            if line.startswith('#') and len(line) > 10:
+                comment = line.lstrip('#').strip()
+                if any(keyword in comment.lower() for keyword in ['script', 'module', 'tool', 'function', 'class']):
+                    return self._format_preview(comment, 100)
+            
+            # Class or function definitions (show the signature)
+            if any(line.startswith(keyword) for keyword in ['class ', 'def ', 'function ', 'export ']):
+                return self._format_preview(line, 100)
+            
+            # Import statements (show what's being imported)
+            if line.startswith(('import ', 'from ', 'require(', 'const ', 'let ', 'var ')):
+                return self._format_preview(line, 100)
+            
+            # JSON/YAML structure indicators
+            if line.startswith(('{', '[', '---')) or ':' in line[:50]:
+                # For structured data, show a summary
+                if '{' in content or '[' in content:
+                    return "JSON/structured data"
+                elif ':' in line and not line.startswith('http'):
+                    return self._format_preview(line, 100)
+            
+            # Skip very short lines, obvious boilerplate
+            if len(line) < 5 or line in ['"""', "'''", '/*', '*/', '<!--', '-->', '<?xml']:
+                continue
+            
+            # Found meaningful content - return it
+            if len(line) > 10:
+                return self._format_preview(line, 100)
+        
+        # Fallback: try to get meaningful content from the start
+        meaningful_start = None
+        for line in cleaned_lines[:5]:  # Check first 5 lines
+            if len(line) > 15 and not line.startswith(('*', '//', '<!--', '#!', '<?')):
+                meaningful_start = line
+                break
+        
+        if meaningful_start:
+            return self._format_preview(meaningful_start, 100)
+        
+        # Last resort: show file type indicator based on content patterns
+        content_lower = content.lower()
+        if 'class ' in content_lower or 'def ' in content_lower:
+            return "Python code"
+        elif 'function' in content_lower or '=>' in content:
+            return "JavaScript code"
+        elif '<html' in content_lower or '<div' in content_lower:
+            return "HTML content"
+        elif content.strip().startswith('{') or content.strip().startswith('['):
+            return "JSON data"
+        elif '---' in content[:50]:
+            return "YAML/Markdown content"
+        
+        return "Text content"
+    
+    def _format_preview(self, text: str, max_length: int) -> str:
+        """Format text for clean single-line preview"""
+        # Remove extra whitespace and ensure single line
+        cleaned = " ".join(text.split())
+        
+        # Remove common code artifacts
+        cleaned = cleaned.replace('"""', '').replace("'''", '').replace('/*', '').replace('*/', '')
+        
+        # Truncate if needed
+        if len(cleaned) > max_length:
+            cleaned = cleaned[:max_length - 3] + "..."
+        
+        return cleaned
+    
+    def _display_tool_results_batch(self):
+        """Display all pending tool results with proper tree formatting"""
+        if not self._pending_results:
+            return
+        
+        results = list(self._pending_results.values())
+        
+        # Display all results with proper tree formatting
+        for i, result in enumerate(results):
+            if i == len(results) - 1:  # Last result
+                prefix = "  └─"
+            else:  # Intermediate results
+                prefix = "  ├─"
+            
+            if self.show_progress:
+                print(f"{prefix} {result}", flush=True)
+        
+        # Clear pending results
+        self._pending_results.clear()
     
     def get_completion_summary(self) -> Optional[Dict[str, Any]]:
         """Get final completion summary (only available if insights enabled)"""

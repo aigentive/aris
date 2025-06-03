@@ -255,31 +255,84 @@ class WorkflowMCPServer:
                 "--input", instruction
             ]
             
-            # Execute ARIS profile in non-interactive mode
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                cwd=os.getcwd()  # Use current working directory as base
+            # Execute ARIS profile using async subprocess with better cancellation support
+            log_debug(f"Starting subprocess with timeout: {timeout}s")
+            
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=os.getcwd()
             )
+            
+            try:
+                # Wait for process completion with timeout and better error handling
+                try:
+                    stdout_data, stderr_data = await asyncio.wait_for(
+                        proc.communicate(), 
+                        timeout=timeout
+                    )
+                except asyncio.TimeoutError:
+                    # Process timed out, need to terminate it
+                    raise
+                except Exception as e:
+                    # Handle other communication errors (e.g., large output issues)
+                    log_error(f"Process communication error for profile {profile}: {e}")
+                    # Try to terminate the process gracefully
+                    if proc.returncode is None:
+                        proc.terminate()
+                        try:
+                            await asyncio.wait_for(proc.wait(), timeout=10.0)
+                        except asyncio.TimeoutError:
+                            proc.kill()
+                            await proc.wait()
+                    # Return error instead of crashing
+                    error_result = {
+                        "success": False,
+                        "status": "communication_error",
+                        "profile": profile,
+                        "workspace": workspace,
+                        "error": f"Process communication failed: {str(e)}",
+                        "exit_code": proc.returncode or -1
+                    }
+                    return [mcp_types.TextContent(
+                        type="text",
+                        text=json.dumps(error_result, indent=2)
+                    )]
+                
+                result_stdout = stdout_data.decode() if stdout_data else ""
+                result_stderr = stderr_data.decode() if stderr_data else ""
+                exit_code = proc.returncode
+                
+            except asyncio.TimeoutError:
+                # Kill the process if it times out
+                log_error(f"Workflow phase timed out after {timeout}s, terminating subprocess: {profile}")
+                try:
+                    proc.terminate()
+                    await asyncio.wait_for(proc.wait(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    log_error(f"Force killing hung subprocess for profile: {profile}")
+                    proc.kill()
+                    await proc.wait()
+                
+                raise subprocess.TimeoutExpired(cmd, timeout)
             
             # Prepare execution result
             execution_result = {
-                "success": result.returncode == 0,
+                "success": exit_code == 0,
                 "profile": profile,
                 "workspace": workspace,
                 "instruction": instruction[:100] + "..." if len(instruction) > 100 else instruction,
-                "exit_code": result.returncode,
-                "response": result.stdout.strip() if result.stdout else "",
-                "error": result.stderr.strip() if result.stderr else ""
+                "exit_code": exit_code,
+                "response": result_stdout.strip() if result_stdout else "",
+                "error": result_stderr.strip() if result_stderr else ""
             }
             
-            if result.returncode == 0:
+            if exit_code == 0:
                 log_debug(f"Workflow phase completed successfully: {profile}")
                 execution_result["status"] = "completed"
             else:
-                log_warning(f"Workflow phase failed: {profile}, exit code: {result.returncode}")
+                log_warning(f"Workflow phase failed: {profile}, exit code: {exit_code}")
                 execution_result["status"] = "failed"
             
             return [mcp_types.TextContent(

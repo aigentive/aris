@@ -200,4 +200,191 @@ async def test_execute_cli_stdout_readline_exception(executor: ClaudeCLIExecutor
         assert len(results) == 1
         status = json.loads(results[0])
         assert status.get("type") == "status"
-        claude_cli_executor.log_error.assert_any_call("ClaudeCLIExecutor: Exception during proc.stdout.readline(): Readline error") 
+        claude_cli_executor.log_error.assert_any_call("ClaudeCLIExecutor: Exception during proc.stdout.readline(): Readline error")
+
+@pytest.mark.asyncio
+async def test_execute_cli_chunk_longer_than_limit_error_triggers_chunked_reading(executor: ClaudeCLIExecutor, mock_process: AsyncMock):
+    """Test that 'chunk is longer than limit' error triggers chunked reading fallback."""
+    prompt = "Test prompt"
+    flags = []
+    
+    # Simulate the specific error that triggers chunked reading, then EOF
+    chunk_limit_error = Exception("Separator is found, but chunk is longer than limit")
+    mock_process.stdout.readline = AsyncMock(side_effect=[chunk_limit_error, b''])  # Error then EOF
+    mock_process.stderr.read = AsyncMock(return_value=b"")
+    mock_process.wait = AsyncMock(return_value=0)
+    
+    # Mock the chunked reading method to return a large response
+    large_response = b'{"type":"assistant","content":"Very large response content..."}' 
+    
+    with patch("asyncio.create_subprocess_exec", return_value=mock_process):
+        with patch.object(executor, '_read_large_response_chunked', return_value=large_response) as mock_chunked_read:
+            results = [chunk async for chunk in executor.execute_cli(prompt_string=prompt, shared_flags=flags)]
+            
+            # Verify chunked reading was called
+            mock_chunked_read.assert_awaited_once_with(mock_process.stdout)
+            
+            # Should get the large response back
+            assert len(results) == 1
+            response_data = json.loads(results[0])
+            assert response_data["type"] == "assistant"
+            assert "Very large response content" in response_data["content"]
+            
+            # Verify proper logging
+            claude_cli_executor.log_error.assert_any_call("ClaudeCLIExecutor: Exception during proc.stdout.readline(): Separator is found, but chunk is longer than limit")
+            claude_cli_executor.log_warning.assert_any_call("ClaudeCLIExecutor: Large response detected, switching to chunked reading")
+
+@pytest.mark.asyncio 
+async def test_read_large_response_chunked_success():
+    """Test successful chunked reading of a large response."""
+    executor = ClaudeCLIExecutor(claude_cli_path="fake_claude_cli")
+    
+    # Create a mock stream that returns data in chunks
+    mock_stream = AsyncMock()
+    large_json = b'{"type":"tool_result","content":"' + b'x' * 10000 + b'"}'
+    newline_terminated = large_json + b'\n'
+    
+    # Split into chunks to simulate chunked reading
+    chunk_size = 8192
+    chunks = [newline_terminated[i:i+chunk_size] for i in range(0, len(newline_terminated), chunk_size)]
+    chunks.append(b'')  # EOF
+    
+    mock_stream.read = AsyncMock(side_effect=chunks)
+    
+    with patch("aris.claude_cli_executor.log_router_activity"):
+        result = await executor._read_large_response_chunked(mock_stream)
+        
+        # Should get the original data back (without newline)
+        assert result == large_json
+        assert len(result) > 8192  # Verify it's actually large
+        
+        # Verify read was called multiple times
+        assert mock_stream.read.call_count >= 2
+
+@pytest.mark.asyncio
+async def test_read_large_response_chunked_timeout_handling():
+    """Test chunked reading with timeout scenarios."""
+    executor = ClaudeCLIExecutor(claude_cli_path="fake_claude_cli")
+    
+    mock_stream = AsyncMock()
+    # First call times out, second call returns data
+    mock_stream.read = AsyncMock(side_effect=[
+        asyncio.TimeoutError(),
+        b'{"type":"response"}\n',
+        b''  # EOF
+    ])
+    
+    with patch("aris.claude_cli_executor.log_router_activity"):
+        with patch("aris.claude_cli_executor.log_warning"):
+            result = await executor._read_large_response_chunked(mock_stream)
+            
+            assert result == b'{"type":"response"}'
+            assert mock_stream.read.call_count == 2  # timeout + data (no EOF needed since line is complete)
+
+@pytest.mark.asyncio
+async def test_read_large_response_chunked_max_chunks_limit():
+    """Test chunked reading respects maximum chunks limit."""
+    executor = ClaudeCLIExecutor(claude_cli_path="fake_claude_cli")
+    
+    mock_stream = AsyncMock()
+    # Return chunks indefinitely (simulating very large response)
+    chunk_data = b'x' * 8192
+    mock_stream.read = AsyncMock(return_value=chunk_data)
+    
+    with patch("aris.claude_cli_executor.log_router_activity"):
+        with patch("aris.claude_cli_executor.log_error"):
+            result = await executor._read_large_response_chunked(mock_stream)
+            
+            # Should hit the 1000 chunk limit and return what it has
+            assert len(result) > 0
+            # Should call read 1000 times (the limit)
+            assert mock_stream.read.call_count == 1000
+
+@pytest.mark.asyncio
+async def test_read_large_response_chunked_eof_without_newline():
+    """Test chunked reading when EOF reached without newline terminator."""
+    executor = ClaudeCLIExecutor(claude_cli_path="fake_claude_cli")
+    
+    mock_stream = AsyncMock()
+    # Data without newline terminator, then EOF
+    mock_stream.read = AsyncMock(side_effect=[
+        b'{"type":"incomplete_response"}',
+        b''  # EOF
+    ])
+    
+    with patch("aris.claude_cli_executor.log_router_activity"):
+        result = await executor._read_large_response_chunked(mock_stream)
+        
+        assert result == b'{"type":"incomplete_response"}'
+
+@pytest.mark.asyncio
+async def test_read_large_response_chunked_error_handling():
+    """Test chunked reading error handling."""
+    executor = ClaudeCLIExecutor(claude_cli_path="fake_claude_cli")
+    
+    mock_stream = AsyncMock()
+    mock_stream.read = AsyncMock(side_effect=Exception("Stream read error"))
+    
+    with patch("aris.claude_cli_executor.log_router_activity"):
+        with patch("aris.claude_cli_executor.log_error"):
+            result = await executor._read_large_response_chunked(mock_stream)
+            
+            # Should return empty bytes on error
+            assert result == b""
+
+@pytest.mark.asyncio
+async def test_execute_cli_chunked_reading_continues_normal_operation(executor: ClaudeCLIExecutor, mock_process: AsyncMock):
+    """Test that after successful chunked reading, normal readline operation continues."""
+    prompt = "Test prompt"
+    flags = []
+    
+    # First readline fails with chunk limit error, then normal operation resumes
+    chunk_limit_error = Exception("Separator is found, but chunk is longer than limit")
+    mock_process.stdout.readline = AsyncMock(side_effect=[
+        chunk_limit_error,  # Triggers chunked reading
+        b'{"type":"normal_message"}\n',  # Normal operation resumes
+        b''  # EOF
+    ])
+    mock_process.stderr.read = AsyncMock(return_value=b"")
+    mock_process.wait = AsyncMock(return_value=0)
+    
+    # Mock chunked reading to return large response
+    large_response = b'{"type":"large_response","data":"x"}' 
+    
+    with patch("asyncio.create_subprocess_exec", return_value=mock_process):
+        with patch.object(executor, '_read_large_response_chunked', return_value=large_response):
+            results = [chunk async for chunk in executor.execute_cli(prompt_string=prompt, shared_flags=flags)]
+            
+            # Should get both the chunked response and the normal message
+            assert len(results) == 2
+            
+            # First result from chunked reading
+            chunked_result = json.loads(results[0])
+            assert chunked_result["type"] == "large_response"
+            
+            # Second result from normal readline
+            normal_result = json.loads(results[1])
+            assert normal_result["type"] == "normal_message"
+            
+            # Verify readline was called multiple times (continue operation after chunked reading)
+            assert mock_process.stdout.readline.call_count == 3  # error + normal + EOF
+
+@pytest.mark.asyncio
+async def test_chunked_reading_handles_remaining_data():
+    """Test that chunked reading properly handles data after newline."""
+    executor = ClaudeCLIExecutor(claude_cli_path="fake_claude_cli")
+    
+    mock_stream = AsyncMock()
+    # Data with newline in middle, followed by additional data
+    response_with_extra = b'{"type":"response"}\n{"type":"next_message"}'
+    mock_stream.read = AsyncMock(side_effect=[response_with_extra, b''])
+    
+    with patch("aris.claude_cli_executor.log_router_activity"):
+        with patch("aris.claude_cli_executor.log_warning") as mock_warning:
+            result = await executor._read_large_response_chunked(mock_stream)
+            
+            # Should return only the first complete line
+            assert result == b'{"type":"response"}'
+            
+            # Should warn about remaining data
+            mock_warning.assert_any_call("ClaudeCLIExecutor: Found 23 bytes after newline - may contain next message") 

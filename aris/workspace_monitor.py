@@ -47,6 +47,12 @@ class WorkspaceFileMonitor:
         '.idea',
         '*.swp',              # Vim swap files
         '.#*',                # Emacs lock files
+        # ARIS-specific files (exclude from workspace monitoring)
+        'logs',               # ARIS log directory
+        'logs/*',             # All files in logs directory
+        'aris_*.log',         # ARIS log files
+        '.aris',              # ARIS profile directory (if in workspace)
+        'CLAUDE.md.bak',      # ARIS backup files
     }
     
     def __init__(self, workspace_path: str, ignore_patterns: Optional[Set[str]] = None, max_files: int = 10000):

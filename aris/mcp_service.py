@@ -72,6 +72,10 @@ class MCPService:
         # Track which servers failed to initialize or return tools
         self.failed_servers = set()
         
+        # Connection locks to prevent concurrent access to same server
+        self._connection_locks = {}  # Maps server_name -> asyncio.Lock
+        self._active_connections = set()  # Track servers currently being connected to
+        
         # Load MCP server configurations from file
         self.load_config(mcp_config_file)
         
@@ -143,8 +147,12 @@ class MCPService:
         self.stdio_servers = {}
         self.failed_servers = set()
         
+        # Clear connection locks to prevent conflicts between old and new configurations
+        self._connection_locks = {}
+        self._active_connections = set()
+        
         # Log the reset
-        log_router_activity(f"MCPService: Reset all servers and state to ensure clean configuration")
+        log_router_activity(f"MCPService: Reset all servers, state, and connection locks to ensure clean configuration")
         
         # Load new configuration
         success = self.load_config(new_config_file)
@@ -240,6 +248,7 @@ class MCPService:
         """
         Initializes a stdio client session and fetches tools in a single operation.
         This avoids asyncio cancellation scope issues by keeping everything in one task.
+        Uses connection locking to prevent concurrent access to the same server.
         
         Args:
             server_name: Name of the server
@@ -251,9 +260,37 @@ class MCPService:
         if not self.stdio_client_available:
             log_warning(f"MCPService: Cannot connect to stdio server '{server_name}' - stdio_client not available")
             return []
-            
-        log_router_activity(f"MCPService: Connecting to stdio server '{server_name}' and fetching tools")
         
+        # Get or create a lock for this server to prevent concurrent connections
+        if server_name not in self._connection_locks:
+            self._connection_locks[server_name] = asyncio.Lock()
+        
+        lock = self._connection_locks[server_name]
+        
+        # Check if connection is already in progress
+        if server_name in self._active_connections:
+            log_router_activity(f"MCPService: Server '{server_name}' connection already in progress, waiting...")
+        
+        async with lock:
+            # Double-check if server failed while we were waiting for the lock
+            if server_name in self.failed_servers:
+                log_router_activity(f"MCPService: Server '{server_name}' already marked as failed, skipping")
+                return []
+            
+            # Mark connection as active
+            self._active_connections.add(server_name)
+            try:
+                log_router_activity(f"MCPService: Connecting to stdio server '{server_name}' and fetching tools")
+                return await self._do_fetch_tools_from_stdio_server(server_name, server_config)
+            finally:
+                # Always remove from active connections when done
+                self._active_connections.discard(server_name)
+    
+    async def _do_fetch_tools_from_stdio_server(self, server_name: str, server_config: Dict[str, Any]) -> List[Dict]:
+        """
+        Internal method that does the actual stdio server connection and tool fetching.
+        This is separated from the locking logic for clarity.
+        """
         # Log server type and environment for debugging
         server_type = server_config.get("type", "unknown")
         env_vars = server_config.get("env", {})
@@ -280,8 +317,8 @@ class MCPService:
         
         # Initialize and fetch tools in one operation to avoid cancellation scope issues
         try:
-            # Set a timeout for the entire operation
-            async with asyncio.timeout(15.0):
+            # Set a timeout for the entire operation (increased for slow startup)
+            async with asyncio.timeout(25.0):
                 # Patch asyncio subprocess creation to capture stderr
                 original_create_subprocess_exec = asyncio.create_subprocess_exec
                 captured_stderr = []
@@ -361,7 +398,8 @@ class MCPService:
                     # Restore original function
                     asyncio.create_subprocess_exec = original_create_subprocess_exec
         except asyncio.TimeoutError:
-            log_warning(f"MCPService: Timeout connecting to stdio server '{server_name}'")
+            log_warning(f"MCPService: Timeout (25s) connecting to stdio server '{server_name}' - continuing without it")
+            self.failed_servers.add(server_name)
             return []
         except Exception as e:
             log_error(f"MCPService: Error connecting to stdio server '{server_name}': {e}")
@@ -540,15 +578,27 @@ class MCPService:
                     self.stdio_servers[server_name] = server_info
                     log_router_activity(f"MCPService: Registered stdio server '{server_name}' in current session")
             
-            # Fetch tools directly with the combined method that avoids cancellation issues
-            stdio_tools = await self._fetch_tools_from_stdio_server_direct(server_name, server_config)
-            
-            # Add tools to the result
-            if stdio_tools:
-                all_tools.extend(stdio_tools)
-                log_router_activity(f"MCPService: Added {len(stdio_tools)} tools from stdio server '{server_name}'")
-            else:
-                log_warning(f"MCPService: No tools fetched from stdio server '{server_name}'")
+            # Fetch tools with extended timeout for stdio servers (especially NPX)
+            try:
+                log_router_activity(f"MCPService: Attempting to connect to stdio server '{server_name}' with 30s timeout")
+                stdio_tools = await asyncio.wait_for(
+                    self._fetch_tools_from_stdio_server_direct(server_name, server_config),
+                    timeout=30.0  # 30 second timeout for stdio connections
+                )
+                
+                # Add tools to the result
+                if stdio_tools:
+                    all_tools.extend(stdio_tools)
+                    log_router_activity(f"MCPService: Added {len(stdio_tools)} tools from stdio server '{server_name}'")
+                else:
+                    log_warning(f"MCPService: No tools fetched from stdio server '{server_name}'")
+                    
+            except asyncio.TimeoutError:
+                log_warning(f"MCPService: Timeout (30s) connecting to stdio server '{server_name}' - skipping")
+                self.failed_servers.add(server_name)
+            except Exception as e:
+                log_warning(f"MCPService: Error connecting to stdio server '{server_name}': {e}")
+                self.failed_servers.add(server_name)
         
         log_router_activity(f"MCPService: Successfully fetched {len(all_tools)} tools from all servers")
         return all_tools
